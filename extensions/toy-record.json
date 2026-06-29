@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "id": "sample.toy-record",
+  "name": "Toy Record",
+  "description": "Sample proprietary binary layout: uint16, uint16, str(64), uint32, uint8.",
+  "fileExtensions": [".toybin", ".bin"],
+  "endianness": "little",
+  "confidence": 10,
+  "minSize": 73,
+  "fields": [
+    {
+      "name": "version",
+      "label": "Version",
+      "type": "u16",
+      "description": "Record format version."
+    },
+    {
+      "name": "flags",
+      "label": "Flags",
+      "type": "u16",
+      "format": "hex",
+      "description": "Application-defined flag bits.",
+      "flags": [
+        { "mask": 1, "label": "Enabled" },
+        { "mask": 2, "label": "Archived" }
+      ]
+    },
+    {
+      "name": "name",
+      "label": "Name",
+      "type": "string",
+      "length": 64,
+      "encoding": "utf8",
+      "trimNull": true,
+      "description": "Null-padded UTF-8 display name."
+    },
+    {
+      "name": "payloadLength",
+      "label": "Payload Length",
+      "type": "u32",
+      "description": "Length of the payload following the header."
+    },
+    {
+      "name": "status",
+      "label": "Status",
+      "type": "u8",
+      "description": "Record status code.",
+      "enum": {
+        "0": "Unknown",
+        "1": "Ready",
+        "2": "Failed"
+      }
+    }
+  ]
+}

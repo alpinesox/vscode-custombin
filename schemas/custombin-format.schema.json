@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://alpinesox.github.io/vscode-custombin/custombin-format.schema.json",
+  "title": "Custom Binary Viewer Format",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "name", "fields"],
+  "properties": {
+    "schemaVersion": { "type": "integer", "const": 1 },
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+$" },
+    "name": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "fileExtensions": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^\\.[A-Za-z0-9_-]+$" },
+      "uniqueItems": true,
+      "default": []
+    },
+    "endianness": { "enum": ["little", "big"], "default": "little" },
+    "confidence": { "type": "integer", "minimum": 0, "maximum": 100, "default": 0 },
+    "minSize": { "type": "integer", "minimum": 0 },
+    "maxSize": { "type": "integer", "minimum": 0 },
+    "magic": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["offset", "bytes"],
+        "properties": {
+          "offset": { "type": "integer", "minimum": 0 },
+          "bytes": { "type": "string", "pattern": "^([0-9A-Fa-f]{2})+$" },
+          "required": { "type": "boolean", "default": true },
+          "description": { "type": "string" }
+        }
+      },
+      "default": []
+    },
+    "fields": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/field" },
+      "minItems": 1
+    }
+  },
+  "$defs": {
+    "field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+        "label": { "type": "string" },
+        "description": { "type": "string" },
+        "offset": { "type": "integer", "minimum": 0 },
+        "type": {
+          "enum": ["u8", "i8", "u16", "i16", "u32", "i32", "u64", "i64", "f32", "f64", "bytes", "string", "struct"]
+        },
+        "endianness": { "enum": ["little", "big"] },
+        "length": { "type": "integer", "minimum": 0, "maximum": 1048576 },
+        "encoding": { "enum": ["ascii", "utf8", "utf16le", "hex"] },
+        "trimNull": { "type": "boolean", "default": true },
+        "count": { "type": "integer", "minimum": 0, "maximum": 4096 },
+        "enum": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "flags": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["mask", "label"],
+            "properties": {
+              "mask": { "type": "integer", "minimum": 0 },
+              "label": { "type": "string" },
+              "description": { "type": "string" }
+            }
+          }
+        },
+        "children": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/field" }
+        },
+        "format": { "enum": ["decimal", "hex", "binary", "timestamp-unix", "raw"] },
+        "required": { "type": "boolean", "default": false }
+      }
+    }
+  }
+}

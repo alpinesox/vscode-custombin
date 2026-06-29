@@ -1,0 +1,109 @@
+{
+  "name": "vscode-custombin",
+  "displayName": "Custom Binary Viewer",
+  "description": "Schema-driven binary file viewer for arbitrary local formats.",
+  "version": "0.1.0",
+  "publisher": "alpinesox",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "Visualization"
+  ],
+  "activationEvents": [
+    "onCustomEditor:custombin.viewer",
+    "onCommand:custombin.open",
+    "onCommand:custombin.selectFormat",
+    "onCommand:custombin.reloadFormats",
+    "onCommand:custombin.validateFormats"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "custombin.open",
+        "title": "Custom Binary Viewer: Open"
+      },
+      {
+        "command": "custombin.selectFormat",
+        "title": "Custom Binary Viewer: Select Format"
+      },
+      {
+        "command": "custombin.reloadFormats",
+        "title": "Custom Binary Viewer: Reload Format Definitions"
+      },
+      {
+        "command": "custombin.validateFormats",
+        "title": "Custom Binary Viewer: Validate Format Definitions"
+      }
+    ],
+    "customEditors": [
+      {
+        "viewType": "custombin.viewer",
+        "displayName": "Custom Binary Viewer",
+        "selector": [
+          {
+            "filenamePattern": "*"
+          }
+        ],
+        "priority": "option"
+      }
+    ],
+    "jsonValidation": [
+      {
+        "fileMatch": [
+          "/extensions/*.json",
+          "/formats/*.json"
+        ],
+        "url": "./schemas/custombin-format.schema.json"
+      }
+    ],
+    "configuration": {
+      "title": "Custom Binary Viewer",
+      "properties": {
+        "custombin.formatFolders": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "extensions",
+            "formats"
+          ],
+          "description": "Workspace-relative folders containing Custom Binary Viewer format JSON files."
+        },
+        "custombin.maxFileBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 104857600,
+          "default": 10485760,
+          "description": "Maximum file size the viewer parses, in bytes."
+        },
+        "custombin.maxArrayItems": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4096,
+          "default": 4096,
+          "description": "Maximum array elements rendered from a single field."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "test": "npm run compile && node ./out/test/runTests.js",
+    "vscode:prepublish": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "18.x",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "eslint": "^8.56.0",
+    "typescript": "^5.3.3"
+  }
+}
