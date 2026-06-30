@@ -148,11 +148,11 @@ Hashes compare the computed digest against the parsed raw field bytes:
 }
 ```
 
-Supported checksum algorithms: `crc32`.
+Supported checksum algorithms: `crc32`, `crc32-reflected`, and `crc32-non-reflected`. `crc32` is an alias for reflected IEEE CRC-32.
 
-Supported hash algorithms: `sha1`, `sha256`, `sha384`, and `sha512`.
+Supported hash algorithms: `sha1`, `sha256`, `sha384`, `sha512`, `sha3-256`, `sha3-384`, and `sha3-512`.
 
-Ranges support either `offset` or `offsetFrom`, plus either `length` or `lengthFrom`. `offsetFrom` and `lengthFrom` reference previously parsed field paths. The default mismatch severity is `error`; set `severity` to `warning` or `info` when a check should be informational.
+Ranges support either `offset` or `offsetFrom`, plus either `length` or `lengthFrom`. Validation runs after parsing, so `offsetFrom`, `lengthFrom`, and computed comparison targets can reference any parsed field path. The default mismatch severity is `error`; set `severity` to `warning` or `info` when a check should be informational.
 
 For truncated or transformed comparisons, use `computed`. Computed expressions are a bounded declarative validation DSL, not user code. They can call a fixed function set, have a maximum expression length, and are evaluated with parser depth and range limits.
 
@@ -190,12 +190,14 @@ Supported computed functions:
 - `slice(offset, length)`: byte slice from the file. Arguments can be numeric literals, hex literals, or previous field paths.
 - `sha1(bytes)`, `sha256(bytes)`, `sha384(bytes)`, `sha512(bytes)`.
 - `sha3_256(bytes)`, `sha3_384(bytes)`, `sha3_512(bytes)`.
-- `crc32(bytes)`.
+- `crc32(bytes)`, `crc32_reflected(bytes)`, `crc32_ieee(bytes)`, `crc32_non_reflected(bytes)`, `crc32_msb(bytes)`, `crc32_mpeg2(bytes)`.
+- `concat(bytes, ...)` to build non-contiguous preimages.
+- `hex(evenLengthHex)` for literal bytes.
 - `u32le(bytes)`, `le32(bytes)`, `u32be(bytes)`, `be32(bytes)`.
 
 Computed byte results compare to field raw bytes. Computed numeric results compare to numeric field values. Byte results can use `[start:end]` suffix slicing, such as `sha384(slice(0x20, key_block_len))[0:4]`.
 
-`derive` currently supports `slice`, `u32le`, `le32`, `u32be`, and `be32`. `compare.targetPath` points to a previously parsed field. `compare.mode` can be `auto`, `numeric`, or `raw-bytes`.
+`derive` currently supports `slice`, `u32le`, `le32`, `u32be`, and `be32`. `compare.targetPath` points to a parsed field. `compare.mode` can be `auto`, `numeric`, or `raw-bytes`.
 
 ## Safety limits
 

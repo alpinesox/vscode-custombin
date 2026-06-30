@@ -22,7 +22,7 @@ export interface DataRange {
 }
 
 export interface IntegrityCheck {
-  algorithm: "crc32" | "sha1" | "sha256" | "sha384" | "sha512";
+  algorithm: "crc32" | "crc32-reflected" | "crc32-non-reflected" | "sha1" | "sha256" | "sha384" | "sha512" | "sha3-256" | "sha3-384" | "sha3-512";
   range: DataRange;
   severity?: DiagnosticSeverity;
 }

@@ -149,7 +149,7 @@
       "additionalProperties": false,
       "required": ["algorithm", "range"],
       "properties": {
-        "algorithm": { "enum": ["crc32"] },
+        "algorithm": { "enum": ["crc32", "crc32-reflected", "crc32-non-reflected"] },
         "range": { "$ref": "#/$defs/range" },
         "severity": { "enum": ["error", "warning", "info"], "default": "error" }
       }
@@ -159,7 +159,7 @@
       "additionalProperties": false,
       "required": ["algorithm", "range"],
       "properties": {
-        "algorithm": { "enum": ["sha1", "sha256", "sha384", "sha512"] },
+        "algorithm": { "enum": ["sha1", "sha256", "sha384", "sha512", "sha3-256", "sha3-384", "sha3-512"] },
         "range": { "$ref": "#/$defs/range" },
         "severity": { "enum": ["error", "warning", "info"], "default": "error" }
       }

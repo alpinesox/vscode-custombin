@@ -19,17 +19,28 @@ interface ParseContext {
   budget: ParseBudget;
   values: Map<string, string | number | bigint | boolean>;
   rawValues: Map<string, Uint8Array>;
+  pendingValidations: PendingValidation[];
+}
+
+interface PendingValidation {
+  field: FieldDefinition;
+  path: string;
+  offset: number;
+  value: string | number | bigint;
+  raw: Uint8Array;
+  diagnostics: ParseDiagnostic[];
 }
 
 export function parseBinary(bytes: Uint8Array, definition: FormatDefinition, options: ParseOptions): ParseResult {
   const diagnostics: ParseDiagnostic[] = [];
-  const context: ParseContext = { reader: new BinaryReader(bytes), definition, rootDiagnostics: diagnostics, options, budget: { nodesRemaining: options.maxRenderedFields, rawBytesRemaining: options.maxRawDisplayBytes, nodeLimitReported: false, rawLimitReported: false }, values: new Map(), rawValues: new Map() };
+  const context: ParseContext = { reader: new BinaryReader(bytes), definition, rootDiagnostics: diagnostics, options, budget: { nodesRemaining: options.maxRenderedFields, rawBytesRemaining: options.maxRawDisplayBytes, nodeLimitReported: false, rawLimitReported: false }, values: new Map(), rawValues: new Map(), pendingValidations: [] };
   const cursor = { offset: 0 };
   const fields: ParsedField[] = [];
   for (const field of definition.fields) {
     const parsed = parseField(context, field, cursor, field.name, 0);
     if (parsed) fields.push(parsed);
   }
+  for (const validation of context.pendingValidations) validateIntegrity(context, validation.field, validation.path, validation.offset, validation.value, validation.raw, validation.diagnostics);
   return { formatId: definition.id, formatName: definition.name, fields, diagnostics, bytesConsumed: cursor.offset };
 }
 
@@ -79,7 +90,7 @@ function parseScalarField(context: ParseContext, field: FieldDefinition, offset:
   context.values.set(path, parsed.value);
   context.rawValues.set(path, parsed.raw);
   const rawValue = formatRawValue(parsed.raw, path, offset, context.rootDiagnostics, context.budget);
-  validateIntegrity(context, field, path, offset, parsed.value, parsed.raw, diagnostics);
+  if (field.computed || field.checksum || field.hash) context.pendingValidations.push({ field, path, offset, value: parsed.value, raw: parsed.raw, diagnostics });
   return {
     path,
     name: field.name,
@@ -332,7 +343,23 @@ function evaluateFunction(context: ParseContext, name: string, args: string[], d
     }
     case "crc32": {
       if (args.length !== 1) throw new Error("crc32 requires one byte input");
-      return crc32Bytes(asBytes(evaluateComputed(context, args[0] ?? "", depth)));
+      return crc32ReflectedBytes(asBytes(evaluateComputed(context, args[0] ?? "", depth)));
+    }
+    case "crc32_reflected": case "crc32_ieee": {
+      if (args.length !== 1) throw new Error(`${name} requires one byte input`);
+      return crc32ReflectedBytes(asBytes(evaluateComputed(context, args[0] ?? "", depth)));
+    }
+    case "crc32_non_reflected": case "crc32_msb": case "crc32_mpeg2": {
+      if (args.length !== 1) throw new Error(`${name} requires one byte input`);
+      return crc32NonReflectedBytes(asBytes(evaluateComputed(context, args[0] ?? "", depth)));
+    }
+    case "concat": {
+      if (args.length < 1 || args.length > 16) throw new Error("concat requires 1 to 16 byte inputs");
+      return concatBytes(args.map(arg => asBytes(evaluateComputed(context, arg, depth))));
+    }
+    case "hex": {
+      if (args.length !== 1) throw new Error("hex requires one hex literal argument");
+      return hexLiteralToBytes(args[0] ?? "");
     }
     case "u32le": case "le32": {
       if (args.length !== 1) throw new Error(`${name} requires one byte input`);
@@ -386,6 +413,23 @@ function asBytes(value: ComputedValue): Uint8Array {
   return new Uint8Array([(value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff]);
 }
 
+function concatBytes(values: Uint8Array[]): Uint8Array {
+  const total = values.reduce((sum, value) => sum + value.byteLength, 0);
+  if (total > 100 * 1024 * 1024) throw new Error("concat result exceeds limit");
+  const result = new Uint8Array(total);
+  let offset = 0;
+  for (const value of values) { result.set(value, offset); offset += value.byteLength; }
+  return result;
+}
+
+function hexLiteralToBytes(value: string): Uint8Array {
+  const normalized = value.trim().replace(/^0x/i, "");
+  if (!/^([0-9A-Fa-f]{2})*$/.test(normalized)) throw new Error("hex literal must contain an even number of hex digits");
+  const bytes = new Uint8Array(normalized.length / 2);
+  for (let i = 0; i < normalized.length; i += 2) bytes[i / 2] = Number.parseInt(normalized.slice(i, i + 2), 16);
+  return bytes;
+}
+
 function asNumber(value: ComputedValue): number {
   if (typeof value === "number") return value;
   if (value.byteLength > 6) throw new Error("byte value is too large for numeric conversion");
@@ -430,23 +474,38 @@ function resolveRange(context: ParseContext, range: DataRange): { offset: number
 }
 
 function computeIntegrity(check: IntegrityCheck, bytes: Uint8Array): Uint8Array {
-  if (isChecksumAlgorithm(check.algorithm)) return crc32Bytes(bytes);
-  return crypto.createHash(check.algorithm).update(bytes).digest();
+  if (check.algorithm === "crc32" || check.algorithm === "crc32-reflected") return crc32ReflectedBytes(bytes);
+  if (check.algorithm === "crc32-non-reflected") return crc32NonReflectedBytes(bytes);
+  return crypto.createHash(hashAlgorithmName(check.algorithm)).update(bytes).digest();
 }
 
 function isChecksumAlgorithm(algorithm: IntegrityCheck["algorithm"]): boolean {
-  return algorithm === "crc32";
+  return algorithm === "crc32" || algorithm === "crc32-reflected" || algorithm === "crc32-non-reflected";
 }
 
-function crc32Bytes(bytes: Uint8Array): Uint8Array {
-  const value = crc32(bytes);
+function crc32ReflectedBytes(bytes: Uint8Array): Uint8Array {
+  const value = crc32Reflected(bytes);
   return new Uint8Array([(value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff]);
 }
 
-function crc32(bytes: Uint8Array): number {
+function crc32NonReflectedBytes(bytes: Uint8Array): Uint8Array {
+  const value = crc32NonReflected(bytes);
+  return new Uint8Array([(value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff]);
+}
+
+function crc32Reflected(bytes: Uint8Array): number {
   let crc = 0xffffffff;
   for (const byte of bytes) crc = (CRC32_TABLE[(crc ^ byte) & 0xff] ?? 0) ^ (crc >>> 8);
   return (crc ^ 0xffffffff) >>> 0;
+}
+
+function crc32NonReflected(bytes: Uint8Array): number {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte << 24;
+    for (let bit = 0; bit < 8; bit++) crc = (crc & 0x80000000) ? ((crc << 1) ^ 0x04c11db7) : (crc << 1);
+  }
+  return crc >>> 0;
 }
 
 const CRC32_TABLE = new Uint32Array(Array.from({ length: 256 }, (_unused, index) => {

@@ -196,7 +196,7 @@ function testSectionsDependsOnAndMetadata(): void {
 }
 
 function testChecksumAndHashDiagnostics(): void {
-  const crcBytes = new Uint8Array([...new TextEncoder().encode("123456789"), 0x26, 0x39, 0xf4, 0xcb, 0x00, 0x00, 0x00, 0x00]);
+  const crcBytes = new Uint8Array([...new TextEncoder().encode("123456789"), 0x26, 0x39, 0xf4, 0xcb, 0x03, 0x76, 0xe6, 0xe7, 0x00, 0x00, 0x00, 0x00]);
   const crcDefinition: FormatDefinition = {
     schemaVersion: 1,
     id: "test.checksum",
@@ -204,11 +204,13 @@ function testChecksumAndHashDiagnostics(): void {
     fields: [
       { name: "data", type: "bytes", length: 9 },
       { name: "crc", type: "u32", endianness: "little", checksum: { algorithm: "crc32", range: { offset: 0, length: 9 } } },
+      { name: "crcNonReflected", type: "u32", endianness: "big", checksum: { algorithm: "crc32-non-reflected", range: { offset: 0, length: 9 } } },
       { name: "badCrc", type: "u32", endianness: "little", checksum: { algorithm: "crc32", range: { offset: 0, length: 9 } } },
     ],
   };
   const crcResult = parseBinary(crcBytes, crcDefinition, parseOptions);
   assert.ok(!crcResult.diagnostics.some(item => item.path === "crc"));
+  assert.ok(!crcResult.diagnostics.some(item => item.path === "crcNonReflected"));
   assert.ok(crcResult.diagnostics.some(item => item.path === "badCrc" && item.severity === "error" && item.message.includes("crc32 mismatch")));
 
   const payload = new Uint8Array([1, 2, 3]);
@@ -229,14 +231,16 @@ function testChecksumAndHashDiagnostics(): void {
 }
 
 function testComputedDiagnostics(): void {
-  const bytes = new Uint8Array(0x30);
+  const bytes = new Uint8Array(0x80);
   const payload = new Uint8Array([10, 20, 30, 40, 50]);
   bytes[0] = payload.length;
   payload.forEach((byte, index) => { bytes[0x20 + index] = byte; });
   const digest = crypto.createHash("sha384").update(payload).digest();
+  const nestedDigest = crypto.createHash("sha384").update(new Uint8Array([0xaa, 0xbb, 0xaa, 0xbb, ...digest])).digest();
   const expected = new DataView(digest.buffer, digest.byteOffset, digest.byteLength).getUint32(0, true);
   new DataView(bytes.buffer).setUint32(1, expected, true);
   new DataView(bytes.buffer).setUint32(5, 0, true);
+  nestedDigest.forEach((byte, index) => { bytes[0x40 + index] = byte; });
   const definition: FormatDefinition = {
     schemaVersion: 1,
     id: "test.computed",
@@ -246,6 +250,8 @@ function testComputedDiagnostics(): void {
       { name: "computedWord", type: "u32", offset: 1, endianness: "little", computed: { expression: "le32(sha384(slice(0x20, key_block_len))[0:4])" } },
       { name: "badComputedWord", type: "u32", offset: 5, endianness: "little", computed: { expression: "u32le(sha384(slice(0x20, key_block_len))[0:4])" } },
       { name: "compareWord", type: "bytes", offset: 9, length: 0, computed: { expression: "sha384(slice(0x20, key_block_len))", derive: [{ op: "slice", start: 0, end: 4 }, { op: "u32le" }], compare: { targetPath: "computedWord", mode: "numeric" } } },
+      { name: "nestedValidation", type: "bytes", offset: 13, length: 0, computed: { expression: "sha384(concat(hex(AABB), hex(AABB), sha384(slice(0x20, key_block_len))))", compare: { targetPath: "nestedDigest", mode: "raw-bytes" } } },
+      { name: "nestedDigest", type: "bytes", offset: 0x40, length: 48 },
     ],
   };
   const validated = validateFormatDefinition(definition, "computed.json");
@@ -253,6 +259,7 @@ function testComputedDiagnostics(): void {
   const result = parseBinary(bytes, definition, parseOptions);
   assert.ok(!result.diagnostics.some(item => item.path === "computedWord"));
   assert.ok(!result.diagnostics.some(item => item.path === "compareWord"));
+  assert.ok(!result.diagnostics.some(item => item.path === "nestedValidation"));
   assert.ok(result.diagnostics.some(item => item.path === "badComputedWord" && item.message.includes("computed mismatch")));
 }
 
