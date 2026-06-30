@@ -5,6 +5,8 @@ import { validateFormatDefinition } from "./validator";
 
 const MAX_FORMAT_FILES = 256;
 const MAX_FORMAT_FILE_BYTES = 1024 * 1024;
+const MAX_FORMAT_PATHS = 32;
+const MAX_FORMAT_PATH_DEPTH = 8;
 
 export class FormatRegistry implements vscode.Disposable {
   private definitions: FormatDefinition[] = [];
@@ -67,6 +69,9 @@ export class FormatRegistry implements vscode.Disposable {
     for (const folder of configuredFolders()) {
       uris.push(...await vscode.workspace.findFiles(`${folder}/*.json`, "**/node_modules/**"));
     }
+    for (const entry of configuredFormatPaths().slice(0, MAX_FORMAT_PATHS)) {
+      uris.push(...await formatPathUris(entry));
+    }
     const builtin = vscode.Uri.joinPath(this.extensionUri, "extensions");
     try {
       for (const [name, type] of await vscode.workspace.fs.readDirectory(builtin)) {
@@ -81,4 +86,100 @@ function configuredFolders(): string[] {
   const raw = vscode.workspace.getConfiguration("custombin").get<string[]>("formatFolders", ["extensions", "formats"]);
   const safe = raw.filter(folder => /^[A-Za-z0-9_.-]+$/.test(folder));
   return safe.length ? Array.from(new Set(safe)) : ["extensions", "formats"];
+}
+
+function configuredFormatPaths(): string[] {
+  const raw = vscode.workspace.getConfiguration("custombin").get<string[]>("formatPaths", []);
+  return Array.from(new Set(raw.filter(item => typeof item === "string" && item.trim().length > 0).map(item => item.trim())));
+}
+
+async function formatPathUris(entry: string): Promise<vscode.Uri[]> {
+  const expanded = expandHome(entry);
+  if (!safeConfiguredPath(expanded)) return [];
+  const roots = path.isAbsolute(expanded) ? [expanded] : workspaceRootPaths().map(root => `${root}${path.sep}${expanded}`);
+  const uris: vscode.Uri[] = [];
+  for (const root of roots) {
+    const parsed = parseFormatPath(root);
+    uris.push(...await collectFormatFiles(vscode.Uri.file(parsed.root), parsed.matcher, 0));
+  }
+  return uris;
+}
+
+function workspaceRootPaths(): string[] {
+  const folders = vscode.workspace.workspaceFolders ?? [];
+  return folders.map(folder => folder.uri.fsPath);
+}
+
+function expandHome(value: string): string {
+  if (value === "~") return homeDirectory();
+  if (value.startsWith(`~${path.sep}`) || value.startsWith("~/") || value.startsWith("~\\")) return `${homeDirectory()}${path.sep}${value.slice(2)}`;
+  return value;
+}
+
+function safeConfiguredPath(value: string): boolean {
+  if (value.includes("\0")) return false;
+  if (path.isAbsolute(value)) return true;
+  return !value.split(/[\\/]+/).some(segment => segment === "..");
+}
+
+function homeDirectory(): string {
+  return process.env.USERPROFILE ?? process.env.HOME ?? "";
+}
+
+function parseFormatPath(value: string): { root: string; matcher: (relativePath: string, isDirectory: boolean) => boolean } {
+  const normalized = path.normalize(value);
+  const segments = normalized.split(/[\\/]+/);
+  const globIndex = segments.findIndex(segment => segment.includes("*"));
+  if (globIndex === -1) return { root: normalized, matcher: (_relativePath, isDirectory) => !isDirectory && _relativePath.toLowerCase().endsWith(".json") };
+  const root = segments.slice(0, globIndex).join(path.sep) || path.parse(normalized).root;
+  const pattern = segments.slice(globIndex).join("/");
+  return { root, matcher: (relativePath, isDirectory) => !isDirectory && globMatches(pattern, relativePath.replace(/\\/g, "/")) };
+}
+
+async function collectFormatFiles(root: vscode.Uri, matcher: (relativePath: string, isDirectory: boolean) => boolean, depth: number, relativePath = ""): Promise<vscode.Uri[]> {
+  if (depth > MAX_FORMAT_PATH_DEPTH) return [];
+  const uris: vscode.Uri[] = [];
+  let entries: [string, vscode.FileType][];
+  try { entries = await vscode.workspace.fs.readDirectory(root); } catch { return []; }
+  for (const [name, type] of entries) {
+    const childRelative = relativePath ? `${relativePath}/${name}` : name;
+    const child = vscode.Uri.joinPath(root, name);
+    if (type === vscode.FileType.Directory) {
+      if (matcher(childRelative, true)) uris.push(child);
+      uris.push(...await collectFormatFiles(child, matcher, depth + 1, childRelative));
+    } else if (type === vscode.FileType.File && matcher(childRelative, false)) {
+      uris.push(child);
+    }
+  }
+  return uris;
+}
+
+function globMatches(pattern: string, relativePath: string): boolean {
+  return globSegmentsMatch(pattern.toLowerCase().split("/"), relativePath.toLowerCase().split("/"), 0, 0);
+}
+
+function globSegmentsMatch(pattern: string[], candidate: string[], patternIndex: number, candidateIndex: number): boolean {
+  if (patternIndex === pattern.length) return candidateIndex === candidate.length;
+  const segment = pattern[patternIndex];
+  if (segment === "**") {
+    for (let index = candidateIndex; index <= candidate.length; index++) if (globSegmentsMatch(pattern, candidate, patternIndex + 1, index)) return true;
+    return false;
+  }
+  if (candidateIndex >= candidate.length) return false;
+  return segmentMatches(segment ?? "", candidate[candidateIndex] ?? "") && globSegmentsMatch(pattern, candidate, patternIndex + 1, candidateIndex + 1);
+}
+
+function segmentMatches(pattern: string, candidate: string): boolean {
+  const parts = pattern.split("*");
+  if (parts.length === 1) return pattern === candidate;
+  let offset = 0;
+  if ((parts[0] ?? "") && !candidate.startsWith(parts[0] ?? "")) return false;
+  for (const part of parts) {
+    if (!part) continue;
+    const index = candidate.indexOf(part, offset);
+    if (index < 0) return false;
+    offset = index + part.length;
+  }
+  const last = parts[parts.length - 1] ?? "";
+  return !last || candidate.endsWith(last);
 }

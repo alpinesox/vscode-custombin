@@ -74,6 +74,14 @@
           ],
           "description": "Workspace-relative folders containing Custom Binary Viewer format JSON files."
         },
+        "custombin.formatPaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Additional absolute, workspace-relative, or ~-expanded directories or glob patterns containing Custom Binary Viewer format JSON files. Recursive discovery is bounded and opt-in."
+        },
         "custombin.maxFileBytes": {
           "type": "integer",
           "minimum": 1,

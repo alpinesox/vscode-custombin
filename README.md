@@ -2,7 +2,7 @@
 
 Custom Binary Viewer is a read-only VS Code extension for inspecting arbitrary binary file formats from local JSON format definitions.
 
-It is intentionally generic. It does not contain certificate, key, ASN.1, or other domain-specific parsers. Instead, it loads definitions from workspace `extensions/` or `formats/` folders and interprets those definitions against binary files.
+It is intentionally generic. It does not contain certificate, key, ASN.1, or other domain-specific parsers. Instead, it loads definitions from workspace `extensions/` or `formats/` folders, optional configured format paths, and bundled samples, then interprets those definitions against binary files.
 
 ## Features
 
@@ -214,11 +214,30 @@ The extension also caps loaded format definition files and skips definition JSON
 
 VS Code custom editor selectors are contributed statically from `package.json`. Runtime JSON definitions cannot dynamically add new custom editor selectors. This extension therefore contributes a broad optional custom editor and works best through **Open With...** or the `Custom Binary Viewer: Open` command. You can use VS Code `workbench.editorAssociations` manually if you want specific extensions to open with this viewer by default.
 
+## Format discovery
+
+The viewer loads workspace format definitions from `custombin.formatFolders`, which defaults to `extensions` and `formats`. These folders are workspace-relative and are discovered with VS Code workspace search.
+
+Use `custombin.formatPaths` for stable, opt-in format locations outside the workspace. Entries can be absolute paths, workspace-relative paths, or `~`-expanded paths. Entries can point to directories or glob-style patterns. Absolute and `~` paths are discovered with bounded recursive `fs.readdir` traversal rather than VS Code workspace search.
+
+Example:
+
+```json
+{
+  "custombin.formatPaths": [
+    "~/.config/custombin/**/*.custombin.json"
+  ]
+}
+```
+
+Directory entries load recursive `.json` files up to the traversal depth limit. Glob entries only load files matching the pattern. The extension caps the number of configured paths, traversal depth, loaded definition files, and definition file size.
+
 ## Security and robustness notes
 
 - Format definitions are local JSON files and are treated as untrusted input.
 - Every binary read is bounds checked.
 - Arrays, nesting, expanded rows, raw-byte display, format file count, and format file size are capped.
+- Non-workspace `custombin.formatPaths` discovery is opt-in and bounded by configured path count and traversal depth.
 - Invalid schemas are skipped and reported as diagnostics.
 - Webview content is escaped and protected by a restrictive Content Security Policy.
 - This viewer does not execute scripts from format definitions.
