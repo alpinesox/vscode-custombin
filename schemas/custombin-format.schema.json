@@ -99,7 +99,53 @@
             { "type": "array", "items": { "$ref": "#/$defs/dependency" }, "minItems": 1 }
           ]
         },
+        "checksum": { "$ref": "#/$defs/checksum" },
+        "hash": { "$ref": "#/$defs/hash" },
         "meta": { "$ref": "#/$defs/meta" }
+      }
+    },
+    "checksum": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "range"],
+      "properties": {
+        "algorithm": { "enum": ["crc32"] },
+        "range": { "$ref": "#/$defs/range" },
+        "severity": { "enum": ["error", "warning", "info"], "default": "error" }
+      }
+    },
+    "hash": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "range"],
+      "properties": {
+        "algorithm": { "enum": ["sha1", "sha256", "sha384", "sha512"] },
+        "range": { "$ref": "#/$defs/range" },
+        "severity": { "enum": ["error", "warning", "info"], "default": "error" }
+      }
+    },
+    "range": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "offset": { "type": "integer", "minimum": 0 },
+        "offsetFrom": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\[\\d+\\])?(\\.[A-Za-z_][A-Za-z0-9_]*(\\[\\d+\\])?)*$" },
+        "length": { "type": "integer", "minimum": 0 },
+        "lengthFrom": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\[\\d+\\])?(\\.[A-Za-z_][A-Za-z0-9_]*(\\[\\d+\\])?)*$" }
+      },
+      "oneOf": [
+        { "required": ["offset"] },
+        { "required": ["offsetFrom"] }
+      ],
+      "anyOf": [
+        { "required": ["length"] },
+        { "required": ["lengthFrom"] }
+      ],
+      "not": {
+        "anyOf": [
+          { "required": ["offset", "offsetFrom"] },
+          { "required": ["length", "lengthFrom"] }
+        ]
       }
     },
     "dependency": {

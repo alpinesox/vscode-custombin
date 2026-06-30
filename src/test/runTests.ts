@@ -1,4 +1,5 @@
 import * as assert from "assert";
+import * as crypto from "crypto";
 import { matchFormats } from "../matcher";
 import { FormatDefinition } from "../model";
 import { parseBinary } from "../parser";
@@ -194,6 +195,39 @@ function testSectionsDependsOnAndMetadata(): void {
   assert.deepStrictEqual(result.fields[1]?.meta, { source: "spec" });
 }
 
+function testChecksumAndHashDiagnostics(): void {
+  const crcBytes = new Uint8Array([...new TextEncoder().encode("123456789"), 0x26, 0x39, 0xf4, 0xcb, 0x00, 0x00, 0x00, 0x00]);
+  const crcDefinition: FormatDefinition = {
+    schemaVersion: 1,
+    id: "test.checksum",
+    name: "Checksum",
+    fields: [
+      { name: "data", type: "bytes", length: 9 },
+      { name: "crc", type: "u32", endianness: "little", checksum: { algorithm: "crc32", range: { offset: 0, length: 9 } } },
+      { name: "badCrc", type: "u32", endianness: "little", checksum: { algorithm: "crc32", range: { offset: 0, length: 9 } } },
+    ],
+  };
+  const crcResult = parseBinary(crcBytes, crcDefinition, parseOptions);
+  assert.ok(!crcResult.diagnostics.some(item => item.path === "crc"));
+  assert.ok(crcResult.diagnostics.some(item => item.path === "badCrc" && item.severity === "error" && item.message.includes("crc32 mismatch")));
+
+  const payload = new Uint8Array([1, 2, 3]);
+  const digest = crypto.createHash("sha256").update(payload).digest();
+  const hashBytes = new Uint8Array([payload.length, ...payload, ...digest]);
+  const hashDefinition: FormatDefinition = {
+    schemaVersion: 1,
+    id: "test.hash",
+    name: "Hash",
+    fields: [
+      { name: "payloadLength", type: "u8", offset: 0 },
+      { name: "payload", type: "bytes", offset: 1, lengthFrom: "payloadLength" },
+      { name: "digest", type: "bytes", offset: 4, length: 32, hash: { algorithm: "sha256", range: { offset: 1, lengthFrom: "payloadLength" } } },
+    ],
+  };
+  const hashResult = parseBinary(hashBytes, hashDefinition, parseOptions);
+  assert.strictEqual(hashResult.diagnostics.length, 0);
+}
+
 function testMatching(): void {
   const magicDef: FormatDefinition = { ...toyDefinition, id: "test.magic", name: "Magic", magic: [{ offset: 0, bytes: "0100" }] };
   const candidates = matchFormats(toyBytes(), "sample.toybin", [toyDefinition, magicDef], parseOptions);
@@ -227,6 +261,7 @@ function run(): void {
   testParseBudgets();
   testLengthFromRepeatAndStride();
   testSectionsDependsOnAndMetadata();
+  testChecksumAndHashDiagnostics();
   testValidation();
   console.log("All tests passed");
 }

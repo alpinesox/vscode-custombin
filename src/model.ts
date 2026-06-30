@@ -14,6 +14,19 @@ export interface FieldDependency {
   mask?: number;
 }
 
+export interface DataRange {
+  offset?: number;
+  offsetFrom?: string;
+  length?: number;
+  lengthFrom?: string;
+}
+
+export interface IntegrityCheck {
+  algorithm: "crc32" | "sha1" | "sha256" | "sha384" | "sha512";
+  range: DataRange;
+  severity?: DiagnosticSeverity;
+}
+
 export interface MagicRule {
   offset: number;
   bytes: string;
@@ -48,6 +61,8 @@ export interface FieldDefinition {
   format?: "decimal" | "hex" | "binary" | "timestamp-unix" | "raw";
   required?: boolean;
   dependsOn?: FieldDependency | FieldDependency[];
+  checksum?: IntegrityCheck;
+  hash?: IntegrityCheck;
   meta?: Metadata;
 }
 

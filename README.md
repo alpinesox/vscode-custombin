@@ -15,6 +15,7 @@ It is intentionally generic. It does not contain certificate, key, ASN.1, or oth
 - Repeated fixed-size entries with `count`, `repeatToEof`, `itemLength`, and `stride`.
 - Length indirection with `lengthFrom` for strings, bytes, and arrays.
 - Conditional fields with `dependsOn`.
+- Checksum and hash validation aids for corruption sanity checks.
 - Top-level and field-level metadata rendered in the viewer.
 - Required field markers are validated today and reserved for stricter matching policies in a future schema revision.
 - UTF-8, ASCII, UTF-16LE, and hex string decoding.
@@ -113,6 +114,44 @@ Fields can include `enum` mappings from integer strings to labels, and `flags` a
 Set `description` on definitions, magic rules, fields, and flags to provide tooltips or diagnostics context.
 
 Top-level definitions can include `title`, `summary`, `version`, `status`, `provenance`, `references`, and `meta`. Each field can also include `meta`. The viewer renders top-level metadata in a metadata section and field metadata in row tooltips. `meta` accepts string, number, boolean, null, or string-array values so definitions can carry source-specific metadata without changing the schema.
+
+## Integrity validation aids
+
+Fields can include `checksum` or `hash` validation metadata. These checks are viewer sanity aids only: they do not execute code, do not change format matching, and do not stop parsing the rest of the file. A mismatch is reported as a top-level diagnostic and on the field row.
+
+CRC-32 checks compare the computed checksum against the parsed numeric field value or raw field bytes:
+
+```json
+{
+  "name": "headerCrc",
+  "type": "u32",
+  "endianness": "little",
+  "checksum": {
+    "algorithm": "crc32",
+    "range": { "offset": 0, "length": 128 }
+  }
+}
+```
+
+Hashes compare the computed digest against the parsed raw field bytes:
+
+```json
+{
+  "name": "payloadSha256",
+  "type": "bytes",
+  "length": 32,
+  "hash": {
+    "algorithm": "sha256",
+    "range": { "offsetFrom": "payloadOffset", "lengthFrom": "payloadLength" }
+  }
+}
+```
+
+Supported checksum algorithms: `crc32`.
+
+Supported hash algorithms: `sha1`, `sha256`, `sha384`, and `sha512`.
+
+Ranges support either `offset` or `offsetFrom`, plus either `length` or `lengthFrom`. `offsetFrom` and `lengthFrom` reference previously parsed field paths. The default mismatch severity is `error`; set `severity` to `warning` or `info` when a check should be informational.
 
 ## Safety limits
 

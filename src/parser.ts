@@ -1,5 +1,6 @@
+import * as crypto from "crypto";
 import { BinaryReader, bytesToHex } from "./binaryReader";
-import { FieldDefinition, FormatDefinition, ParsedField, ParseDiagnostic, ParseResult } from "./model";
+import { DataRange, FieldDefinition, FormatDefinition, IntegrityCheck, ParsedField, ParseDiagnostic, ParseResult } from "./model";
 
 export interface ParseOptions { maxArrayItems: number; maxRenderedFields: number; maxRawDisplayBytes: number }
 
@@ -76,6 +77,7 @@ function parseScalarField(context: ParseContext, field: FieldDefinition, offset:
   const parsed = parseScalar(context, field, offset);
   context.values.set(path, parsed.value);
   const rawValue = formatRawValue(parsed.raw, path, offset, context.rootDiagnostics, context.budget);
+  validateIntegrity(context, field, path, offset, parsed.value, parsed.raw, diagnostics);
   return {
     path,
     name: field.name,
@@ -246,6 +248,78 @@ function numericValue(context: ParseContext, path: string): number | undefined {
   if (value === undefined) return undefined;
   const numeric = typeof value === "bigint" ? Number(value) : Number(value);
   return Number.isSafeInteger(numeric) && numeric >= 0 ? numeric : undefined;
+}
+
+function validateIntegrity(context: ParseContext, field: FieldDefinition, path: string, offset: number, value: string | number | bigint, raw: Uint8Array, fieldDiagnostics: ParseDiagnostic[]): void {
+  const check = field.checksum ?? field.hash;
+  if (!check) return;
+  const range = resolveRange(context, check.range);
+  if (!range) {
+    pushIntegrityDiagnostic(context, fieldDiagnostics, check, `Unable to validate ${path}; checksum/hash range could not be resolved.`, path, offset);
+    return;
+  }
+  const bytes = context.reader.slice(range.offset, range.length);
+  const actual = computeIntegrity(check, bytes);
+  const matches = isChecksumAlgorithm(check.algorithm) ? integrityNumberMatches(value, raw, actual) : bytesEqual(raw, actual);
+  if (!matches) {
+    pushIntegrityDiagnostic(context, fieldDiagnostics, check, `${path} ${check.algorithm} mismatch: expected ${expectedDisplay(value, raw)}, computed ${bytesToHex(actual)}.`, path, offset);
+  }
+}
+
+function resolveRange(context: ParseContext, range: DataRange): { offset: number; length: number } | undefined {
+  const offset = range.offsetFrom ? numericValue(context, range.offsetFrom) : range.offset;
+  const length = range.lengthFrom ? numericValue(context, range.lengthFrom) : range.length;
+  if (offset === undefined || length === undefined) return undefined;
+  return { offset, length };
+}
+
+function computeIntegrity(check: IntegrityCheck, bytes: Uint8Array): Uint8Array {
+  if (isChecksumAlgorithm(check.algorithm)) return crc32Bytes(bytes);
+  return crypto.createHash(check.algorithm).update(bytes).digest();
+}
+
+function isChecksumAlgorithm(algorithm: IntegrityCheck["algorithm"]): boolean {
+  return algorithm === "crc32";
+}
+
+function crc32Bytes(bytes: Uint8Array): Uint8Array {
+  const value = crc32(bytes);
+  return new Uint8Array([(value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff]);
+}
+
+function crc32(bytes: Uint8Array): number {
+  let crc = 0xffffffff;
+  for (const byte of bytes) crc = (CRC32_TABLE[(crc ^ byte) & 0xff] ?? 0) ^ (crc >>> 8);
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+const CRC32_TABLE = new Uint32Array(Array.from({ length: 256 }, (_unused, index) => {
+  let value = index;
+  for (let bit = 0; bit < 8; bit++) value = (value & 1) ? (0xedb88320 ^ (value >>> 1)) : (value >>> 1);
+  return value >>> 0;
+}));
+
+function integrityNumberMatches(value: string | number | bigint, raw: Uint8Array, computed: Uint8Array): boolean {
+  const computedNumber = ((computed[0] ?? 0) * 0x1000000) + ((computed[1] ?? 0) << 16) + ((computed[2] ?? 0) << 8) + (computed[3] ?? 0);
+  if (typeof value === "number") return value >>> 0 === computedNumber >>> 0;
+  if (typeof value === "bigint") return value === BigInt(computedNumber >>> 0);
+  return bytesEqual(raw, computed);
+}
+
+function expectedDisplay(value: string | number | bigint, raw: Uint8Array): string {
+  return typeof value === "number" || typeof value === "bigint" ? String(value) : bytesToHex(raw);
+}
+
+function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
+  if (left.byteLength !== right.byteLength) return false;
+  for (let i = 0; i < left.byteLength; i++) if (left[i] !== right[i]) return false;
+  return true;
+}
+
+function pushIntegrityDiagnostic(context: ParseContext, fieldDiagnostics: ParseDiagnostic[], check: IntegrityCheck, message: string, path: string, offset: number): void {
+  const diagnostic = { severity: check.severity ?? "error", message, path, offset };
+  fieldDiagnostics.push(diagnostic);
+  context.rootDiagnostics.push(diagnostic);
 }
 
 function formatValue(value: string | number | bigint, field: FieldDefinition, raw: Uint8Array): string {

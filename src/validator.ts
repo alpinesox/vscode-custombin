@@ -2,10 +2,13 @@ import { FormatDefinition, RegistryDiagnostic } from "./model";
 
 const SUPPORTED_TYPES = new Set(["u8", "i8", "u16", "i16", "u32", "i32", "u64", "i64", "f32", "f64", "bytes", "string", "struct", "section"]);
 const TOP_LEVEL_KEYS = new Set(["schemaVersion", "id", "name", "title", "summary", "version", "status", "provenance", "references", "meta", "description", "fileExtensions", "endianness", "confidence", "minSize", "maxSize", "magic", "fields"]);
-const FIELD_KEYS = new Set(["name", "label", "description", "offset", "type", "endianness", "length", "encoding", "trimNull", "count", "repeatToEof", "stride", "itemLength", "lengthFrom", "enum", "flags", "children", "format", "required", "dependsOn", "meta"]);
+const FIELD_KEYS = new Set(["name", "label", "description", "offset", "type", "endianness", "length", "encoding", "trimNull", "count", "repeatToEof", "stride", "itemLength", "lengthFrom", "enum", "flags", "children", "format", "required", "dependsOn", "checksum", "hash", "meta"]);
 const MAGIC_KEYS = new Set(["offset", "bytes", "required", "description"]);
 const ENCODINGS = new Set(["ascii", "utf8", "utf16le", "hex"]);
 const FORMATS = new Set(["decimal", "hex", "binary", "timestamp-unix", "raw"]);
+const CHECKSUM_ALGORITHMS = new Set(["crc32"]);
+const HASH_ALGORITHMS = new Set(["sha1", "sha256", "sha384", "sha512"]);
+const SEVERITIES = new Set(["error", "warning", "info"]);
 const MAX_DEPTH = 16;
 const MAX_FIELDS = 4096;
 
@@ -59,6 +62,8 @@ function validateField(value: unknown, sourcePath: string, diagnostics: Registry
   if (value.trimNull !== undefined && typeof value.trimNull !== "boolean") diagnostics.push(diag(sourcePath, "field.trimNull must be boolean."));
   if (value.required !== undefined && typeof value.required !== "boolean") diagnostics.push(diag(sourcePath, "field.required must be boolean."));
   validateDependsOn(value.dependsOn, sourcePath, diagnostics);
+  validateIntegrityCheck(value.checksum, sourcePath, diagnostics, "field.checksum", CHECKSUM_ALGORITHMS);
+  validateIntegrityCheck(value.hash, sourcePath, diagnostics, "field.hash", HASH_ALGORITHMS);
   validateMetadata(value.meta, sourcePath, diagnostics, "field.meta");
   validateEnum(value.enum, sourcePath, diagnostics);
   validateFlags(value.flags, sourcePath, diagnostics);
@@ -104,6 +109,28 @@ function validateDependsOn(value: unknown, sourcePath: string, diagnostics: Regi
     if (dependency.equals !== undefined && !isScalarComparable(dependency.equals)) diagnostics.push(diag(sourcePath, "dependsOn.equals must be a string, number, or boolean."));
     if (dependency.notEquals !== undefined && !isScalarComparable(dependency.notEquals)) diagnostics.push(diag(sourcePath, "dependsOn.notEquals must be a string, number, or boolean."));
   }
+}
+
+function validateIntegrityCheck(value: unknown, sourcePath: string, diagnostics: RegistryDiagnostic[], label: string, algorithms: Set<string>): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) { diagnostics.push(diag(sourcePath, `${label} must be an object.`)); return; }
+  rejectUnknownKeys(value, new Set(["algorithm", "range", "severity"]), sourcePath, diagnostics, label);
+  if (typeof value.algorithm !== "string" || !algorithms.has(value.algorithm)) diagnostics.push(diag(sourcePath, `${label}.algorithm is invalid.`));
+  validateRange(value.range, sourcePath, diagnostics, `${label}.range`);
+  if (value.severity !== undefined && (typeof value.severity !== "string" || !SEVERITIES.has(value.severity))) diagnostics.push(diag(sourcePath, `${label}.severity is invalid.`));
+}
+
+function validateRange(value: unknown, sourcePath: string, diagnostics: RegistryDiagnostic[], label: string): void {
+  if (!isRecord(value)) { diagnostics.push(diag(sourcePath, `${label} must be an object.`)); return; }
+  rejectUnknownKeys(value, new Set(["offset", "offsetFrom", "length", "lengthFrom"]), sourcePath, diagnostics, label);
+  validateOptionalInteger(value.offset, sourcePath, diagnostics, `${label}.offset`, 0);
+  validateOptionalInteger(value.length, sourcePath, diagnostics, `${label}.length`, 0, 1024 * 1024 * 100);
+  if (value.offsetFrom !== undefined && (typeof value.offsetFrom !== "string" || !isFieldPath(value.offsetFrom))) diagnostics.push(diag(sourcePath, `${label}.offsetFrom must be a field path.`));
+  if (value.lengthFrom !== undefined && (typeof value.lengthFrom !== "string" || !isFieldPath(value.lengthFrom))) diagnostics.push(diag(sourcePath, `${label}.lengthFrom must be a field path.`));
+  if (value.offset === undefined && value.offsetFrom === undefined) diagnostics.push(diag(sourcePath, `${label} requires offset or offsetFrom.`));
+  if (value.length === undefined && value.lengthFrom === undefined) diagnostics.push(diag(sourcePath, `${label} requires length or lengthFrom.`));
+  if (value.offset !== undefined && value.offsetFrom !== undefined) diagnostics.push(diag(sourcePath, `${label} must not define both offset and offsetFrom.`));
+  if (value.length !== undefined && value.lengthFrom !== undefined) diagnostics.push(diag(sourcePath, `${label} must not define both length and lengthFrom.`));
 }
 
 function validateMetadata(value: unknown, sourcePath: string, diagnostics: RegistryDiagnostic[], label: string): void {
