@@ -87,6 +87,20 @@
           "maximum": 4096,
           "default": 4096,
           "description": "Maximum array elements rendered from a single field."
+        },
+        "custombin.maxRenderedFields": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20000,
+          "default": 10000,
+          "description": "Maximum expanded field rows rendered for one parse result."
+        },
+        "custombin.maxRawDisplayBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1048576,
+          "default": 65536,
+          "description": "Maximum aggregate raw bytes converted to display text for one parse result."
         }
       }
     }

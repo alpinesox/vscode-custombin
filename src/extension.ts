@@ -59,9 +59,14 @@ class CustomBinEditorProvider implements vscode.CustomReadonlyEditorProvider {
   async resolveCustomEditor(document: vscode.CustomDocument, panel: vscode.WebviewPanel): Promise<void> {
     panel.webview.options = { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, "media")] };
     if (panel.active) activeCustomBinUri = document.uri;
-    panel.onDidChangeViewState(event => {
+    const disposables: vscode.Disposable[] = [];
+    disposables.push(panel.onDidChangeViewState(event => {
       if (event.webviewPanel.active) activeCustomBinUri = document.uri;
-    });
+    }));
+    disposables.push(panel.onDidDispose(() => {
+      if (activeCustomBinUri?.toString() === document.uri.toString()) activeCustomBinUri = undefined;
+      disposables.splice(0).forEach(disposable => { disposable.dispose(); });
+    }));
     let selectedId: string | undefined = this.context.workspaceState.get<string>(overrideKey(document.uri));
     const render = async (): Promise<void> => {
       try {
@@ -74,7 +79,7 @@ class CustomBinEditorProvider implements vscode.CustomReadonlyEditorProvider {
       }
     };
     await render();
-    panel.webview.onDidReceiveMessage(async (message: unknown) => {
+    disposables.push(panel.webview.onDidReceiveMessage(async (message: unknown) => {
       if (isSelectFormatMessage(message)) {
         const candidates = await this.candidates(document.uri);
         if (!candidates.some(candidate => candidate.definition.id === message.formatId)) return;
@@ -85,18 +90,25 @@ class CustomBinEditorProvider implements vscode.CustomReadonlyEditorProvider {
         await this.registry.load();
         await render();
       }
-    });
+    }));
   }
 
   private async candidates(uri: vscode.Uri): Promise<CandidateResult[]> {
     const config = vscode.workspace.getConfiguration("custombin");
-    const maxFileBytes = config.get<number>("maxFileBytes", 10 * 1024 * 1024);
-    const maxArrayItems = config.get<number>("maxArrayItems", 4096);
+    const maxFileBytes = clampInteger(config.get<number>("maxFileBytes"), 1, 100 * 1024 * 1024, 10 * 1024 * 1024);
+    const maxArrayItems = clampInteger(config.get<number>("maxArrayItems"), 1, 4096, 4096);
+    const maxRenderedFields = clampInteger(config.get<number>("maxRenderedFields"), 1, 20000, 10000);
+    const maxRawDisplayBytes = clampInteger(config.get<number>("maxRawDisplayBytes"), 0, 1024 * 1024, 64 * 1024);
     const stat = await vscode.workspace.fs.stat(uri);
     if (stat.size > maxFileBytes) throw new Error(`File is ${stat.size} bytes; limit is ${maxFileBytes}.`);
     const bytes = await vscode.workspace.fs.readFile(uri);
-    return matchFormats(bytes, path.basename(uri.fsPath), this.registry.all, { maxArrayItems });
+    return matchFormats(bytes, path.basename(uri.fsPath), this.registry.all, { maxArrayItems, maxRenderedFields, maxRawDisplayBytes });
   }
+}
+
+function clampInteger(value: number | undefined, min: number, max: number, fallback: number): number {
+  if (!Number.isInteger(value)) return fallback;
+  return Math.max(min, Math.min(max, value as number));
 }
 
 function isSelectFormatMessage(message: unknown): message is { command: "selectFormat"; formatId: string } {

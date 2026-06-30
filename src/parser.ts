@@ -1,15 +1,28 @@
 import { BinaryReader, bytesToHex } from "./binaryReader";
 import { FieldDefinition, FormatDefinition, ParsedField, ParseDiagnostic, ParseResult } from "./model";
 
-export interface ParseOptions { maxArrayItems: number }
+export interface ParseOptions { maxArrayItems: number; maxRenderedFields: number; maxRawDisplayBytes: number }
+
+interface ParseBudget {
+  nodesRemaining: number;
+  rawBytesRemaining: number;
+  nodeLimitReported: boolean;
+  rawLimitReported: boolean;
+}
 
 export function parseBinary(bytes: Uint8Array, definition: FormatDefinition, options: ParseOptions): ParseResult {
   const reader = new BinaryReader(bytes);
   const diagnostics: ParseDiagnostic[] = [];
+  const budget: ParseBudget = {
+    nodesRemaining: options.maxRenderedFields,
+    rawBytesRemaining: options.maxRawDisplayBytes,
+    nodeLimitReported: false,
+    rawLimitReported: false,
+  };
   const cursor = { offset: 0 };
   const fields: ParsedField[] = [];
   for (const field of definition.fields) {
-    const parsed = parseField(reader, definition, field, cursor, field.name, diagnostics, options, 0);
+    const parsed = parseField(reader, definition, field, cursor, field.name, diagnostics, options, budget, 0);
     if (parsed) fields.push(parsed);
   }
   return { formatId: definition.id, formatName: definition.name, fields, diagnostics, bytesConsumed: cursor.offset };
@@ -23,6 +36,7 @@ function parseField(
   path: string,
   rootDiagnostics: ParseDiagnostic[],
   options: ParseOptions,
+  budget: ParseBudget,
   depth: number
 ): ParsedField | undefined {
   const offset = field.offset ?? cursor.offset;
@@ -30,11 +44,12 @@ function parseField(
   const label = field.label ?? field.name;
   try {
     if (depth > 16) throw new Error("Maximum nested structure depth exceeded.");
+    if (!consumeNodeBudget(budget, rootDiagnostics, path, offset)) return undefined;
     const result = field.count !== undefined
-      ? parseArray(reader, definition, field, offset, path, rootDiagnostics, options, depth)
+      ? parseArray(reader, definition, field, offset, path, rootDiagnostics, options, budget, depth)
       : field.type === "struct"
-        ? parseStruct(reader, definition, field, offset, path, rootDiagnostics, options, depth)
-        : parseScalarField(reader, definition, field, offset, path, label, diagnostics);
+        ? parseStruct(reader, definition, field, offset, path, rootDiagnostics, options, budget, depth)
+        : parseScalarField(reader, definition, field, offset, path, label, diagnostics, rootDiagnostics, budget);
     if (field.offset === undefined) cursor.offset = offset + result.length;
     return result;
   } catch (error) {
@@ -56,8 +71,9 @@ function parseField(
   }
 }
 
-function parseScalarField(reader: BinaryReader, definition: FormatDefinition, field: FieldDefinition, offset: number, path: string, label: string, diagnostics: ParseDiagnostic[]): ParsedField {
+function parseScalarField(reader: BinaryReader, definition: FormatDefinition, field: FieldDefinition, offset: number, path: string, label: string, diagnostics: ParseDiagnostic[], rootDiagnostics: ParseDiagnostic[], budget: ParseBudget): ParsedField {
   const parsed = parseScalar(reader, definition, field, offset);
+  const rawValue = formatRawValue(parsed.raw, path, offset, rootDiagnostics, budget);
   return {
     path,
     name: field.name,
@@ -66,8 +82,8 @@ function parseScalarField(reader: BinaryReader, definition: FormatDefinition, fi
     type: field.type,
     offset,
     length: parsed.length,
-    rawValue: bytesToHex(parsed.raw, " "),
-    displayValue: formatValue(parsed.value, field, parsed.raw),
+    rawValue,
+    displayValue: field.type === "bytes" ? rawValue : formatValue(parsed.value, field, parsed.raw),
     diagnostics,
   };
 }
@@ -94,13 +110,15 @@ function parseStruct(
   path: string,
   rootDiagnostics: ParseDiagnostic[],
   options: ParseOptions,
+  budget: ParseBudget,
   depth: number
 ): ParsedField {
   const childCursor = { offset };
   const children: ParsedField[] = [];
   for (const child of field.children ?? []) {
-    const parsed = parseField(reader, definition, child, childCursor, `${path}.${child.name}`, rootDiagnostics, options, depth + 1);
+    const parsed = parseField(reader, definition, child, childCursor, `${path}.${child.name}`, rootDiagnostics, options, budget, depth + 1);
     if (parsed) children.push(parsed);
+    if (budget.nodesRemaining <= 0) { reportNodeBudget(budget, rootDiagnostics, `${path}.${child.name}`, childCursor.offset); break; }
   }
   const length = Math.max(0, childCursor.offset - offset);
   return { path, name: field.name, label: field.label ?? field.name, description: field.description, type: field.type, offset, length, rawValue: "", displayValue: `${children.length} fields`, children, diagnostics: [] };
@@ -114,6 +132,7 @@ function parseArray(
   path: string,
   rootDiagnostics: ParseDiagnostic[],
   options: ParseOptions,
+  budget: ParseBudget,
   depth: number
 ): ParsedField {
   const count = Math.min(field.count ?? 0, options.maxArrayItems);
@@ -121,8 +140,9 @@ function parseArray(
   const itemCursor = { offset };
   const children: ParsedField[] = [];
   for (let i = 0; i < count; i++) {
-    const parsed = parseField(reader, definition, item, itemCursor, `${path}[${i}]`, rootDiagnostics, options, depth + 1);
+    const parsed = parseField(reader, definition, item, itemCursor, `${path}[${i}]`, rootDiagnostics, options, budget, depth + 1);
     if (parsed) children.push({ ...parsed, label: `${field.label ?? field.name} [${i}]` });
+    if (budget.nodesRemaining <= 0) { reportNodeBudget(budget, rootDiagnostics, `${path}[${i}]`, itemCursor.offset); break; }
   }
   if ((field.count ?? 0) > options.maxArrayItems) rootDiagnostics.push({ severity: "warning", message: `Array ${path} truncated at ${options.maxArrayItems} items.`, path, offset });
   return { path, name: field.name, label: field.label ?? field.name, description: field.description, type: field.type, offset, length: Math.max(0, itemCursor.offset - offset), rawValue: "", displayValue: `${children.length} item(s)`, children, diagnostics: [] };
@@ -139,6 +159,32 @@ function textDecoderEncoding(encoding: string): string {
   if (encoding === "ascii") return "latin1";
   if (encoding === "utf16le") return "utf-16le";
   return encoding;
+}
+
+function consumeNodeBudget(budget: ParseBudget, diagnostics: ParseDiagnostic[], path: string, offset: number): boolean {
+  if (budget.nodesRemaining > 0) { budget.nodesRemaining--; return true; }
+  reportNodeBudget(budget, diagnostics, path, offset);
+  return false;
+}
+
+function reportNodeBudget(budget: ParseBudget, diagnostics: ParseDiagnostic[], path: string, offset: number): void {
+  if (budget.nodeLimitReported) return;
+  diagnostics.push({ severity: "warning", message: "Parse output truncated because the rendered field limit was reached.", path, offset });
+  budget.nodeLimitReported = true;
+}
+
+function formatRawValue(raw: Uint8Array, path: string, offset: number, diagnostics: ParseDiagnostic[], budget: ParseBudget): string {
+  const allowed = Math.max(0, Math.min(raw.byteLength, budget.rawBytesRemaining));
+  budget.rawBytesRemaining -= allowed;
+  const formatted = allowed > 0 ? bytesToHex(raw.subarray(0, allowed), " ") : "";
+  if (allowed < raw.byteLength) {
+    if (!budget.rawLimitReported) {
+      diagnostics.push({ severity: "warning", message: "Raw byte display truncated because the raw display budget was reached.", path, offset });
+      budget.rawLimitReported = true;
+    }
+    return formatted ? `${formatted} ... <truncated>` : "<truncated>";
+  }
+  return formatted;
 }
 
 function formatValue(value: string | number | bigint, field: FieldDefinition, raw: Uint8Array): string {
@@ -158,7 +204,11 @@ function flagActive(value: number | bigint, mask: number): boolean {
 
 function formatPrimitive(value: string | number | bigint, field: FieldDefinition, raw: Uint8Array): string {
   if (field.format === "hex") return `0x${bytesToHex(raw)}`;
-  if (field.format === "binary" && (typeof value === "number" || typeof value === "bigint")) return `0b${value.toString(2)}`;
+  if (field.format === "binary" && (typeof value === "number" || typeof value === "bigint")) return `0b${bytesToBinary(raw)}`;
   if (field.format === "timestamp-unix" && (typeof value === "number" || typeof value === "bigint")) return new Date(Number(value) * 1000).toISOString();
   return String(value);
+}
+
+function bytesToBinary(bytes: Uint8Array): string {
+  return Array.from(bytes).map(byte => byte.toString(2).padStart(8, "0")).join("");
 }

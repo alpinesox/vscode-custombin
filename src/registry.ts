@@ -3,6 +3,9 @@ import * as vscode from "vscode";
 import { FormatDefinition, RegistryDiagnostic } from "./model";
 import { validateFormatDefinition } from "./validator";
 
+const MAX_FORMAT_FILES = 256;
+const MAX_FORMAT_FILE_BYTES = 1024 * 1024;
+
 export class FormatRegistry implements vscode.Disposable {
   private definitions: FormatDefinition[] = [];
   private diagnostics: RegistryDiagnostic[] = [];
@@ -18,9 +21,15 @@ export class FormatRegistry implements vscode.Disposable {
   async load(): Promise<void> {
     const loaded: FormatDefinition[] = [];
     const diagnostics: RegistryDiagnostic[] = [];
-    for (const uri of await this.definitionUris()) {
+    const uris = await this.definitionUris();
+    if (uris.length > MAX_FORMAT_FILES) diagnostics.push({ severity: "warning", message: `Loaded first ${MAX_FORMAT_FILES} format definition files; ${uris.length - MAX_FORMAT_FILES} skipped.` });
+    for (const uri of uris.slice(0, MAX_FORMAT_FILES)) {
       try {
         const bytes = await vscode.workspace.fs.readFile(uri);
+        if (bytes.byteLength > MAX_FORMAT_FILE_BYTES) {
+          diagnostics.push({ severity: "error", message: `Format definition file exceeds ${MAX_FORMAT_FILE_BYTES} bytes and was skipped.`, sourcePath: uri.fsPath });
+          continue;
+        }
         const parsed = JSON.parse(Buffer.from(bytes).toString("utf8")) as unknown;
         const result = validateFormatDefinition(parsed, uri.fsPath);
         diagnostics.push(...result.diagnostics);

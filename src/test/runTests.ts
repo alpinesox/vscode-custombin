@@ -4,6 +4,8 @@ import { FormatDefinition } from "../model";
 import { parseBinary } from "../parser";
 import { validateFormatDefinition } from "../validator";
 
+const parseOptions = { maxArrayItems: 128, maxRenderedFields: 10000, maxRawDisplayBytes: 65536 };
+
 function toyBytes(): Uint8Array {
   const bytes = new Uint8Array(73);
   const view = new DataView(bytes.buffer);
@@ -31,7 +33,7 @@ const toyDefinition: FormatDefinition = {
 };
 
 function testParser(): void {
-  const result = parseBinary(toyBytes(), toyDefinition, { maxArrayItems: 128 });
+  const result = parseBinary(toyBytes(), toyDefinition, parseOptions);
   assert.strictEqual(result.diagnostics.length, 0);
   assert.strictEqual(result.fields[0]?.displayValue, "1");
   assert.strictEqual(result.fields[1]?.displayValue, "0x0300 [Enabled, Archived]");
@@ -42,7 +44,7 @@ function testParser(): void {
 
 function testBounds(): void {
   const truncated = toyBytes().subarray(0, 3);
-  const result = parseBinary(truncated, toyDefinition, { maxArrayItems: 128 });
+  const result = parseBinary(truncated, toyDefinition, parseOptions);
   assert.ok(result.diagnostics.some(item => item.severity === "error"));
 }
 
@@ -59,7 +61,7 @@ function testStructAndArrayCursor(): void {
       { name: "tail", type: "u8" },
     ],
   };
-  const result = parseBinary(bytes, definition, { maxArrayItems: 16 });
+  const result = parseBinary(bytes, definition, parseOptions);
   assert.strictEqual(result.diagnostics.length, 0);
   assert.strictEqual(result.fields[0]?.offset, 0);
   assert.strictEqual(result.fields[0]?.length, 4);
@@ -71,7 +73,7 @@ function testStructAndArrayCursor(): void {
 
 function testExplicitOffsetArray(): void {
   const definition: FormatDefinition = { schemaVersion: 1, id: "test.offset-array", name: "Offset Array", endianness: "little", fields: [{ name: "items", type: "u8", offset: 1, count: 3 }] };
-  const result = parseBinary(new Uint8Array([9, 1, 2, 3]), definition, { maxArrayItems: 16 });
+  const result = parseBinary(new Uint8Array([9, 1, 2, 3]), definition, parseOptions);
   assert.strictEqual(result.diagnostics.length, 0);
   assert.deepStrictEqual(result.fields[0]?.children?.map(item => item.displayValue), ["1", "2", "3"]);
   assert.strictEqual(result.fields[0]?.length, 3);
@@ -97,32 +99,58 @@ function testEndianOffsetsAndLargeIntegers(): void {
       { name: "bits", type: "u8", format: "binary" },
     ],
   };
-  const result = parseBinary(bytes, definition, { maxArrayItems: 16 });
+  const result = parseBinary(bytes, definition, parseOptions);
   assert.strictEqual(result.diagnostics.length, 0);
   assert.strictEqual(result.fields[1]?.displayValue, "0x1234");
   assert.strictEqual(result.fields[2]?.displayValue, "72623859790382856");
   assert.strictEqual(result.fields[3]?.displayValue, "-2");
-  assert.strictEqual(result.fields[4]?.displayValue, "0b1111");
+  assert.strictEqual(result.fields[4]?.displayValue, "0b00001111");
+}
+
+function testNegativeBinaryUsesRawBits(): void {
+  const bytes = new Uint8Array(8);
+  new DataView(bytes.buffer).setBigInt64(0, -2n, false);
+  const definition: FormatDefinition = { schemaVersion: 1, id: "test.negative-binary", name: "Negative Binary", endianness: "big", fields: [{ name: "negative", type: "i64", format: "binary" }] };
+  const result = parseBinary(bytes, definition, parseOptions);
+  assert.strictEqual(result.diagnostics.length, 0);
+  assert.strictEqual(result.fields[0]?.displayValue, "0b1111111111111111111111111111111111111111111111111111111111111110");
 }
 
 function testUtf16String(): void {
   const bytes = new Uint8Array([0x48, 0x00, 0x69, 0x00, 0x00, 0x00]);
   const definition: FormatDefinition = { schemaVersion: 1, id: "test.utf16", name: "UTF-16", fields: [{ name: "text", type: "string", length: 6, encoding: "utf16le" }] };
-  const result = parseBinary(bytes, definition, { maxArrayItems: 16 });
+  const result = parseBinary(bytes, definition, parseOptions);
   assert.strictEqual(result.diagnostics.length, 0);
   assert.strictEqual(result.fields[0]?.displayValue, "Hi");
 }
 
 function testOptionalMagicDoesNotExclude(): void {
   const definition: FormatDefinition = { ...toyDefinition, id: "test.optional-magic", name: "Optional Magic", magic: [{ offset: 0, bytes: "FFFF", required: false }] };
-  const candidates = matchFormats(toyBytes(), "sample.toybin", [definition], { maxArrayItems: 128 });
+  const candidates = matchFormats(toyBytes(), "sample.toybin", [definition], parseOptions);
   assert.strictEqual(candidates.length, 1);
   assert.strictEqual(candidates[0]?.definition.id, "test.optional-magic");
 }
 
+function testParseBudgets(): void {
+  const nested: FormatDefinition = {
+    schemaVersion: 1,
+    id: "test.budget",
+    name: "Budget",
+    fields: [{ name: "outer", type: "struct", count: 16, children: [{ name: "inner", type: "string", length: 0, count: 16 }] }],
+  };
+  const result = parseBinary(new Uint8Array(1), nested, { maxArrayItems: 16, maxRenderedFields: 10, maxRawDisplayBytes: 16 });
+  assert.ok(result.diagnostics.some(item => item.message.includes("rendered field limit")));
+  assert.ok((result.fields[0]?.children?.length ?? 0) < 16);
+
+  const raw: FormatDefinition = { schemaVersion: 1, id: "test.raw-budget", name: "Raw Budget", fields: [{ name: "a", type: "bytes", length: 4 }, { name: "b", type: "bytes", offset: 0, length: 4 }] };
+  const rawResult = parseBinary(new Uint8Array([1, 2, 3, 4]), raw, { maxArrayItems: 16, maxRenderedFields: 10, maxRawDisplayBytes: 3 });
+  assert.strictEqual(rawResult.fields[0]?.rawValue, "01 02 03 ... <truncated>");
+  assert.strictEqual(rawResult.fields[1]?.rawValue, "<truncated>");
+}
+
 function testMatching(): void {
   const magicDef: FormatDefinition = { ...toyDefinition, id: "test.magic", name: "Magic", magic: [{ offset: 0, bytes: "0100" }] };
-  const candidates = matchFormats(toyBytes(), "sample.toybin", [toyDefinition, magicDef], { maxArrayItems: 128 });
+  const candidates = matchFormats(toyBytes(), "sample.toybin", [toyDefinition, magicDef], parseOptions);
   assert.strictEqual(candidates[0]?.definition.id, "test.magic");
   assert.ok((candidates[0]?.score ?? 0) > (candidates[1]?.score ?? 0));
 }
@@ -146,9 +174,11 @@ function run(): void {
   testStructAndArrayCursor();
   testExplicitOffsetArray();
   testEndianOffsetsAndLargeIntegers();
+  testNegativeBinaryUsesRawBits();
   testUtf16String();
   testMatching();
   testOptionalMagicDoesNotExclude();
+  testParseBudgets();
   testValidation();
   console.log("All tests passed");
 }
