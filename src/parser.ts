@@ -1,6 +1,6 @@
 import * as crypto from "crypto";
 import { BinaryReader, bytesToHex } from "./binaryReader";
-import { DataRange, FieldDefinition, FormatDefinition, IntegrityCheck, ParsedField, ParseDiagnostic, ParseResult } from "./model";
+import { ComputedCheck, DataRange, FieldDefinition, FormatDefinition, IntegrityCheck, ParsedField, ParseDiagnostic, ParseResult } from "./model";
 
 export interface ParseOptions { maxArrayItems: number; maxRenderedFields: number; maxRawDisplayBytes: number }
 
@@ -251,6 +251,7 @@ function numericValue(context: ParseContext, path: string): number | undefined {
 }
 
 function validateIntegrity(context: ParseContext, field: FieldDefinition, path: string, offset: number, value: string | number | bigint, raw: Uint8Array, fieldDiagnostics: ParseDiagnostic[]): void {
+  if (field.computed) validateComputed(context, field.computed, path, offset, value, raw, fieldDiagnostics);
   const check = field.checksum ?? field.hash;
   if (!check) return;
   const range = resolveRange(context, check.range);
@@ -264,6 +265,137 @@ function validateIntegrity(context: ParseContext, field: FieldDefinition, path: 
   if (!matches) {
     pushIntegrityDiagnostic(context, fieldDiagnostics, check, `${path} ${check.algorithm} mismatch: expected ${expectedDisplay(value, raw)}, computed ${bytesToHex(actual)}.`, path, offset);
   }
+}
+
+type ComputedValue = Uint8Array | number;
+
+function validateComputed(context: ParseContext, check: ComputedCheck, path: string, offset: number, value: string | number | bigint, raw: Uint8Array, fieldDiagnostics: ParseDiagnostic[]): void {
+  try {
+    const computed = evaluateComputed(context, check.expression, 0);
+    const matches = typeof computed === "number" ? computedNumberMatches(value, raw, computed) : bytesEqual(raw, computed);
+    if (!matches) pushComputedDiagnostic(context, fieldDiagnostics, check, `${path} computed mismatch: expected ${expectedDisplay(value, raw)}, computed ${computedDisplay(computed)}.`, path, offset);
+  } catch (error) {
+    pushComputedDiagnostic(context, fieldDiagnostics, check, `Unable to validate ${path}; computed expression failed: ${error instanceof Error ? error.message : String(error)}.`, path, offset);
+  }
+}
+
+function evaluateComputed(context: ParseContext, expression: string, depth: number): ComputedValue {
+  if (depth > 16) throw new Error("maximum computed expression depth exceeded");
+  const trimmed = expression.trim();
+  const slice = parseSliceSuffix(trimmed);
+  if (slice) return byteSlice(asBytes(evaluateComputed(context, slice.target, depth + 1)), slice.start, slice.end);
+  if (/^0x[0-9A-Fa-f]+$/.test(trimmed)) return Number.parseInt(trimmed.slice(2), 16);
+  if (/^\d+$/.test(trimmed)) return Number.parseInt(trimmed, 10);
+  const call = parseFunctionCall(trimmed);
+  if (call) return evaluateFunction(context, call.name, call.args, depth + 1);
+  const value = numericValue(context, trimmed);
+  if (value !== undefined) return value;
+  throw new Error(`unsupported token ${trimmed}`);
+}
+
+function evaluateFunction(context: ParseContext, name: string, args: string[], depth: number): ComputedValue {
+  switch (name.toLowerCase()) {
+    case "slice": {
+      if (args.length !== 2) throw new Error("slice requires offset and length");
+      const offset = asNumber(evaluateComputed(context, args[0] ?? "", depth));
+      const length = asNumber(evaluateComputed(context, args[1] ?? "", depth));
+      if (length > 100 * 1024 * 1024) throw new Error("slice length exceeds limit");
+      return context.reader.slice(offset, length);
+    }
+    case "sha1": case "sha256": case "sha384": case "sha512": case "sha3_256": case "sha3_384": case "sha3_512": {
+      if (args.length !== 1) throw new Error(`${name} requires one byte input`);
+      return crypto.createHash(hashAlgorithmName(name)).update(asBytes(evaluateComputed(context, args[0] ?? "", depth))).digest();
+    }
+    case "crc32": {
+      if (args.length !== 1) throw new Error("crc32 requires one byte input");
+      return crc32Bytes(asBytes(evaluateComputed(context, args[0] ?? "", depth)));
+    }
+    case "u32le": case "le32": {
+      if (args.length !== 1) throw new Error(`${name} requires one byte input`);
+      return readU32(asBytes(evaluateComputed(context, args[0] ?? "", depth)), true);
+    }
+    case "u32be": case "be32": {
+      if (args.length !== 1) throw new Error(`${name} requires one byte input`);
+      return readU32(asBytes(evaluateComputed(context, args[0] ?? "", depth)), false);
+    }
+    default: throw new Error(`unsupported function ${name}`);
+  }
+}
+
+function parseFunctionCall(expression: string): { name: string; args: string[] } | undefined {
+  const match = /^([A-Za-z_][A-Za-z0-9_]*)\((.*)\)$/.exec(expression);
+  if (!match) return undefined;
+  return { name: match[1] ?? "", args: splitArgs(match[2] ?? "") };
+}
+
+function splitArgs(input: string): string[] {
+  const args: string[] = [];
+  let depth = 0;
+  let bracketDepth = 0;
+  let start = 0;
+  for (let i = 0; i < input.length; i++) {
+    const char = input[i];
+    if (char === "(") depth++;
+    else if (char === ")") depth--;
+    else if (char === "[") bracketDepth++;
+    else if (char === "]") bracketDepth--;
+    else if (char === "," && depth === 0 && bracketDepth === 0) { args.push(input.slice(start, i).trim()); start = i + 1; }
+  }
+  const last = input.slice(start).trim();
+  if (last) args.push(last);
+  return args;
+}
+
+function parseSliceSuffix(expression: string): { target: string; start: number; end: number } | undefined {
+  const match = /^(.*)\[(\d+):(\d+)\]$/.exec(expression);
+  if (!match) return undefined;
+  return { target: (match[1] ?? "").trim(), start: Number.parseInt(match[2] ?? "0", 10), end: Number.parseInt(match[3] ?? "0", 10) };
+}
+
+function byteSlice(bytes: Uint8Array, start: number, end: number): Uint8Array {
+  if (start < 0 || end < start || end > bytes.byteLength) throw new Error("computed byte slice is out of range");
+  return bytes.subarray(start, end);
+}
+
+function asBytes(value: ComputedValue): Uint8Array {
+  if (value instanceof Uint8Array) return value;
+  return new Uint8Array([(value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff]);
+}
+
+function asNumber(value: ComputedValue): number {
+  if (typeof value === "number") return value;
+  if (value.byteLength > 6) throw new Error("byte value is too large for numeric conversion");
+  return Array.from(value).reduce((total, byte) => (total * 256) + byte, 0);
+}
+
+function hashAlgorithmName(name: string): string {
+  return name.replace(/_/g, "-");
+}
+
+function readU32(bytes: Uint8Array, littleEndian: boolean): number {
+  if (bytes.byteLength < 4) throw new Error("u32 conversion requires at least four bytes");
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return view.getUint32(0, littleEndian);
+}
+
+function computedNumberMatches(value: string | number | bigint, raw: Uint8Array, computed: number): boolean {
+  if (typeof value === "number") return value >>> 0 === computed >>> 0;
+  if (typeof value === "bigint") return value === BigInt(computed >>> 0);
+  return integrityNumberMatches(value, raw, u32beBytes(computed));
+}
+
+function u32beBytes(value: number): Uint8Array {
+  return new Uint8Array([(value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff]);
+}
+
+function computedDisplay(value: ComputedValue): string {
+  return typeof value === "number" ? String(value) : bytesToHex(value);
+}
+
+function pushComputedDiagnostic(context: ParseContext, fieldDiagnostics: ParseDiagnostic[], check: ComputedCheck, message: string, path: string, offset: number): void {
+  const diagnostic = { severity: check.severity ?? "error", message, path, offset };
+  fieldDiagnostics.push(diagnostic);
+  context.rootDiagnostics.push(diagnostic);
 }
 
 function resolveRange(context: ParseContext, range: DataRange): { offset: number; length: number } | undefined {

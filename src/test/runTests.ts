@@ -228,6 +228,32 @@ function testChecksumAndHashDiagnostics(): void {
   assert.strictEqual(hashResult.diagnostics.length, 0);
 }
 
+function testComputedDiagnostics(): void {
+  const bytes = new Uint8Array(0x30);
+  const payload = new Uint8Array([10, 20, 30, 40, 50]);
+  bytes[0] = payload.length;
+  payload.forEach((byte, index) => { bytes[0x20 + index] = byte; });
+  const digest = crypto.createHash("sha384").update(payload).digest();
+  const expected = new DataView(digest.buffer, digest.byteOffset, digest.byteLength).getUint32(0, true);
+  new DataView(bytes.buffer).setUint32(1, expected, true);
+  new DataView(bytes.buffer).setUint32(5, 0, true);
+  const definition: FormatDefinition = {
+    schemaVersion: 1,
+    id: "test.computed",
+    name: "Computed",
+    fields: [
+      { name: "key_block_len", type: "u8", offset: 0 },
+      { name: "computedWord", type: "u32", offset: 1, endianness: "little", computed: { expression: "le32(sha384(slice(0x20, key_block_len))[0:4])" } },
+      { name: "badComputedWord", type: "u32", offset: 5, endianness: "little", computed: { expression: "u32le(sha384(slice(0x20, key_block_len))[0:4])" } },
+    ],
+  };
+  const validated = validateFormatDefinition(definition, "computed.json");
+  assert.strictEqual(validated.diagnostics.length, 0);
+  const result = parseBinary(bytes, definition, parseOptions);
+  assert.ok(!result.diagnostics.some(item => item.path === "computedWord"));
+  assert.ok(result.diagnostics.some(item => item.path === "badComputedWord" && item.message.includes("computed mismatch")));
+}
+
 function testMatching(): void {
   const magicDef: FormatDefinition = { ...toyDefinition, id: "test.magic", name: "Magic", magic: [{ offset: 0, bytes: "0100" }] };
   const candidates = matchFormats(toyBytes(), "sample.toybin", [toyDefinition, magicDef], parseOptions);
@@ -262,6 +288,7 @@ function run(): void {
   testLengthFromRepeatAndStride();
   testSectionsDependsOnAndMetadata();
   testChecksumAndHashDiagnostics();
+  testComputedDiagnostics();
   testValidation();
   console.log("All tests passed");
 }

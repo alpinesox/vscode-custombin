@@ -27,6 +27,11 @@ export interface IntegrityCheck {
   severity?: DiagnosticSeverity;
 }
 
+export interface ComputedCheck {
+  expression: string;
+  severity?: DiagnosticSeverity;
+}
+
 export interface MagicRule {
   offset: number;
   bytes: string;
@@ -63,6 +68,7 @@ export interface FieldDefinition {
   dependsOn?: FieldDependency | FieldDependency[];
   checksum?: IntegrityCheck;
   hash?: IntegrityCheck;
+  computed?: ComputedCheck;
   meta?: Metadata;
 }
 

@@ -16,6 +16,7 @@ It is intentionally generic. It does not contain certificate, key, ASN.1, or oth
 - Length indirection with `lengthFrom` for strings, bytes, and arrays.
 - Conditional fields with `dependsOn`.
 - Checksum and hash validation aids for corruption sanity checks.
+- Computed validation expressions for truncated or transformed checksum/hash comparisons.
 - Top-level and field-level metadata rendered in the viewer.
 - Required field markers are validated today and reserved for stricter matching policies in a future schema revision.
 - UTF-8, ASCII, UTF-16LE, and hex string decoding.
@@ -152,6 +153,29 @@ Supported checksum algorithms: `crc32`.
 Supported hash algorithms: `sha1`, `sha256`, `sha384`, and `sha512`.
 
 Ranges support either `offset` or `offsetFrom`, plus either `length` or `lengthFrom`. `offsetFrom` and `lengthFrom` reference previously parsed field paths. The default mismatch severity is `error`; set `severity` to `warning` or `info` when a check should be informational.
+
+For truncated or transformed comparisons, use `computed`. Computed expressions are a bounded declarative validation DSL, not user code. They can call a fixed function set, have a maximum expression length, and are evaluated with parser depth and range limits.
+
+```json
+{
+  "name": "keyBlockCheck",
+  "type": "u32",
+  "endianness": "little",
+  "computed": {
+    "expression": "le32(sha384(slice(0x20, key_block_len))[0:4])"
+  }
+}
+```
+
+Supported computed functions:
+
+- `slice(offset, length)`: byte slice from the file. Arguments can be numeric literals, hex literals, or previous field paths.
+- `sha1(bytes)`, `sha256(bytes)`, `sha384(bytes)`, `sha512(bytes)`.
+- `sha3_256(bytes)`, `sha3_384(bytes)`, `sha3_512(bytes)`.
+- `crc32(bytes)`.
+- `u32le(bytes)`, `le32(bytes)`, `u32be(bytes)`, `be32(bytes)`.
+
+Computed byte results compare to field raw bytes. Computed numeric results compare to numeric field values. Byte results can use `[start:end]` suffix slicing, such as `sha384(slice(0x20, key_block_len))[0:4]`.
 
 ## Safety limits
 

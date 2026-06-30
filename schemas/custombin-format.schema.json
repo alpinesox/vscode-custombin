@@ -101,7 +101,17 @@
         },
         "checksum": { "$ref": "#/$defs/checksum" },
         "hash": { "$ref": "#/$defs/hash" },
+        "computed": { "$ref": "#/$defs/computed" },
         "meta": { "$ref": "#/$defs/meta" }
+      }
+    },
+    "computed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expression"],
+      "properties": {
+        "expression": { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "^[A-Za-z0-9_().,:[\\]\\s+-]+$" },
+        "severity": { "enum": ["error", "warning", "info"], "default": "error" }
       }
     },
     "checksum": {

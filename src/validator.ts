@@ -2,7 +2,7 @@ import { FormatDefinition, RegistryDiagnostic } from "./model";
 
 const SUPPORTED_TYPES = new Set(["u8", "i8", "u16", "i16", "u32", "i32", "u64", "i64", "f32", "f64", "bytes", "string", "struct", "section"]);
 const TOP_LEVEL_KEYS = new Set(["schemaVersion", "id", "name", "title", "summary", "version", "status", "provenance", "references", "meta", "description", "fileExtensions", "endianness", "confidence", "minSize", "maxSize", "magic", "fields"]);
-const FIELD_KEYS = new Set(["name", "label", "description", "offset", "type", "endianness", "length", "encoding", "trimNull", "count", "repeatToEof", "stride", "itemLength", "lengthFrom", "enum", "flags", "children", "format", "required", "dependsOn", "checksum", "hash", "meta"]);
+const FIELD_KEYS = new Set(["name", "label", "description", "offset", "type", "endianness", "length", "encoding", "trimNull", "count", "repeatToEof", "stride", "itemLength", "lengthFrom", "enum", "flags", "children", "format", "required", "dependsOn", "checksum", "hash", "computed", "meta"]);
 const MAGIC_KEYS = new Set(["offset", "bytes", "required", "description"]);
 const ENCODINGS = new Set(["ascii", "utf8", "utf16le", "hex"]);
 const FORMATS = new Set(["decimal", "hex", "binary", "timestamp-unix", "raw"]);
@@ -64,6 +64,7 @@ function validateField(value: unknown, sourcePath: string, diagnostics: Registry
   validateDependsOn(value.dependsOn, sourcePath, diagnostics);
   validateIntegrityCheck(value.checksum, sourcePath, diagnostics, "field.checksum", CHECKSUM_ALGORITHMS);
   validateIntegrityCheck(value.hash, sourcePath, diagnostics, "field.hash", HASH_ALGORITHMS);
+  validateComputed(value.computed, sourcePath, diagnostics);
   validateMetadata(value.meta, sourcePath, diagnostics, "field.meta");
   validateEnum(value.enum, sourcePath, diagnostics);
   validateFlags(value.flags, sourcePath, diagnostics);
@@ -131,6 +132,15 @@ function validateRange(value: unknown, sourcePath: string, diagnostics: Registry
   if (value.length === undefined && value.lengthFrom === undefined) diagnostics.push(diag(sourcePath, `${label} requires length or lengthFrom.`));
   if (value.offset !== undefined && value.offsetFrom !== undefined) diagnostics.push(diag(sourcePath, `${label} must not define both offset and offsetFrom.`));
   if (value.length !== undefined && value.lengthFrom !== undefined) diagnostics.push(diag(sourcePath, `${label} must not define both length and lengthFrom.`));
+}
+
+function validateComputed(value: unknown, sourcePath: string, diagnostics: RegistryDiagnostic[]): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) { diagnostics.push(diag(sourcePath, "field.computed must be an object.")); return; }
+  rejectUnknownKeys(value, new Set(["expression", "severity"]), sourcePath, diagnostics, "computed");
+  if (typeof value.expression !== "string" || value.expression.length < 1 || value.expression.length > 512) diagnostics.push(diag(sourcePath, "field.computed.expression must be a non-empty string up to 512 characters."));
+  if (typeof value.expression === "string" && !/^[A-Za-z0-9_().,:[\]\s+-]+$/.test(value.expression)) diagnostics.push(diag(sourcePath, "field.computed.expression contains unsupported characters."));
+  if (value.severity !== undefined && (typeof value.severity !== "string" || !SEVERITIES.has(value.severity))) diagnostics.push(diag(sourcePath, "field.computed.severity is invalid."));
 }
 
 function validateMetadata(value: unknown, sourcePath: string, diagnostics: RegistryDiagnostic[], label: string): void {
