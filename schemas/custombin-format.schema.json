@@ -111,7 +111,37 @@
       "required": ["expression"],
       "properties": {
         "expression": { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "^[A-Za-z0-9_().,:[\\]\\s+-]+$" },
+        "derive": {
+          "type": "array",
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/deriveStep" }
+        },
+        "compare": { "$ref": "#/$defs/compare" },
         "severity": { "enum": ["error", "warning", "info"], "default": "error" }
+      }
+    },
+    "deriveStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op"],
+      "properties": {
+        "op": { "enum": ["slice", "u32le", "le32", "u32be", "be32"] },
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "op": { "const": "slice" } } },
+          "then": { "required": ["start", "end"] }
+        }
+      ]
+    },
+    "compare": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "targetPath": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\[\\d+\\])?(\\.[A-Za-z_][A-Za-z0-9_]*(\\[\\d+\\])?)*$" },
+        "mode": { "enum": ["auto", "numeric", "raw-bytes"], "default": "auto" }
       }
     },
     "checksum": {

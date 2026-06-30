@@ -167,6 +167,24 @@ For truncated or transformed comparisons, use `computed`. Computed expressions a
 }
 ```
 
+You can also separate the base expression, derivation steps, and comparison target. This supports cases such as “SHA-384 over a range, first four digest bytes interpreted as a little-endian `u32`, equals another field path”:
+
+```json
+{
+  "name": "keyHashValidation",
+  "type": "bytes",
+  "length": 0,
+  "computed": {
+    "expression": "sha384(slice(0x20, key_block_len))",
+    "derive": [
+      { "op": "slice", "start": 0, "end": 4 },
+      { "op": "u32le" }
+    ],
+    "compare": { "targetPath": "keyhash_word0", "mode": "numeric" }
+  }
+}
+```
+
 Supported computed functions:
 
 - `slice(offset, length)`: byte slice from the file. Arguments can be numeric literals, hex literals, or previous field paths.
@@ -176,6 +194,8 @@ Supported computed functions:
 - `u32le(bytes)`, `le32(bytes)`, `u32be(bytes)`, `be32(bytes)`.
 
 Computed byte results compare to field raw bytes. Computed numeric results compare to numeric field values. Byte results can use `[start:end]` suffix slicing, such as `sha384(slice(0x20, key_block_len))[0:4]`.
+
+`derive` currently supports `slice`, `u32le`, `le32`, `u32be`, and `be32`. `compare.targetPath` points to a previously parsed field. `compare.mode` can be `auto`, `numeric`, or `raw-bytes`.
 
 ## Safety limits
 

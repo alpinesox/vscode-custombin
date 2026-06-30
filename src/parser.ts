@@ -18,11 +18,12 @@ interface ParseContext {
   options: ParseOptions;
   budget: ParseBudget;
   values: Map<string, string | number | bigint | boolean>;
+  rawValues: Map<string, Uint8Array>;
 }
 
 export function parseBinary(bytes: Uint8Array, definition: FormatDefinition, options: ParseOptions): ParseResult {
   const diagnostics: ParseDiagnostic[] = [];
-  const context: ParseContext = { reader: new BinaryReader(bytes), definition, rootDiagnostics: diagnostics, options, budget: { nodesRemaining: options.maxRenderedFields, rawBytesRemaining: options.maxRawDisplayBytes, nodeLimitReported: false, rawLimitReported: false }, values: new Map() };
+  const context: ParseContext = { reader: new BinaryReader(bytes), definition, rootDiagnostics: diagnostics, options, budget: { nodesRemaining: options.maxRenderedFields, rawBytesRemaining: options.maxRawDisplayBytes, nodeLimitReported: false, rawLimitReported: false }, values: new Map(), rawValues: new Map() };
   const cursor = { offset: 0 };
   const fields: ParsedField[] = [];
   for (const field of definition.fields) {
@@ -76,6 +77,7 @@ function parseField(
 function parseScalarField(context: ParseContext, field: FieldDefinition, offset: number, path: string, label: string, diagnostics: ParseDiagnostic[]): ParsedField {
   const parsed = parseScalar(context, field, offset);
   context.values.set(path, parsed.value);
+  context.rawValues.set(path, parsed.raw);
   const rawValue = formatRawValue(parsed.raw, path, offset, context.rootDiagnostics, context.budget);
   validateIntegrity(context, field, path, offset, parsed.value, parsed.raw, diagnostics);
   return {
@@ -271,12 +273,34 @@ type ComputedValue = Uint8Array | number;
 
 function validateComputed(context: ParseContext, check: ComputedCheck, path: string, offset: number, value: string | number | bigint, raw: Uint8Array, fieldDiagnostics: ParseDiagnostic[]): void {
   try {
-    const computed = evaluateComputed(context, check.expression, 0);
-    const matches = typeof computed === "number" ? computedNumberMatches(value, raw, computed) : bytesEqual(raw, computed);
-    if (!matches) pushComputedDiagnostic(context, fieldDiagnostics, check, `${path} computed mismatch: expected ${expectedDisplay(value, raw)}, computed ${computedDisplay(computed)}.`, path, offset);
+    const computed = applyDerive(evaluateComputed(context, check.expression, 0), check.derive);
+    const targetPath = check.compare?.targetPath;
+    const targetValue = targetPath ? context.values.get(targetPath) : value;
+    const targetRaw = targetPath ? context.rawValues.get(targetPath) : raw;
+    if (targetValue === undefined || targetRaw === undefined) throw new Error(`compare target ${targetPath ?? path} is unavailable`);
+    const matches = computedMatches(computed, targetValue, targetRaw, check.compare?.mode ?? "auto");
+    if (!matches) pushComputedDiagnostic(context, fieldDiagnostics, check, `${path} computed mismatch against ${targetPath ?? path}: expected ${expectedDisplay(targetValue, targetRaw)}, computed ${computedDisplay(computed)}.`, path, offset);
   } catch (error) {
     pushComputedDiagnostic(context, fieldDiagnostics, check, `Unable to validate ${path}; computed expression failed: ${error instanceof Error ? error.message : String(error)}.`, path, offset);
   }
+}
+
+function applyDerive(value: ComputedValue, derive: ComputedCheck["derive"]): ComputedValue {
+  let current = value;
+  for (const step of derive ?? []) {
+    switch (step.op) {
+      case "slice": current = byteSlice(asBytes(current), step.start, step.end); break;
+      case "u32le": case "le32": current = readU32(asBytes(current), true); break;
+      case "u32be": case "be32": current = readU32(asBytes(current), false); break;
+    }
+  }
+  return current;
+}
+
+function computedMatches(computed: ComputedValue, targetValue: string | number | bigint | boolean, targetRaw: Uint8Array, mode: "auto" | "numeric" | "raw-bytes"): boolean {
+  if (mode === "numeric") return typeof computed === "number" && computedNumberMatches(targetValue, targetRaw, computed);
+  if (mode === "raw-bytes") return bytesEqual(asBytes(computed), targetRaw);
+  return typeof computed === "number" ? computedNumberMatches(targetValue, targetRaw, computed) : bytesEqual(targetRaw, computed);
 }
 
 function evaluateComputed(context: ParseContext, expression: string, depth: number): ComputedValue {
@@ -378,7 +402,7 @@ function readU32(bytes: Uint8Array, littleEndian: boolean): number {
   return view.getUint32(0, littleEndian);
 }
 
-function computedNumberMatches(value: string | number | bigint, raw: Uint8Array, computed: number): boolean {
+function computedNumberMatches(value: string | number | bigint | boolean, raw: Uint8Array, computed: number): boolean {
   if (typeof value === "number") return value >>> 0 === computed >>> 0;
   if (typeof value === "bigint") return value === BigInt(computed >>> 0);
   return integrityNumberMatches(value, raw, u32beBytes(computed));
@@ -431,15 +455,15 @@ const CRC32_TABLE = new Uint32Array(Array.from({ length: 256 }, (_unused, index)
   return value >>> 0;
 }));
 
-function integrityNumberMatches(value: string | number | bigint, raw: Uint8Array, computed: Uint8Array): boolean {
+function integrityNumberMatches(value: string | number | bigint | boolean, raw: Uint8Array, computed: Uint8Array): boolean {
   const computedNumber = ((computed[0] ?? 0) * 0x1000000) + ((computed[1] ?? 0) << 16) + ((computed[2] ?? 0) << 8) + (computed[3] ?? 0);
   if (typeof value === "number") return value >>> 0 === computedNumber >>> 0;
   if (typeof value === "bigint") return value === BigInt(computedNumber >>> 0);
   return bytesEqual(raw, computed);
 }
 
-function expectedDisplay(value: string | number | bigint, raw: Uint8Array): string {
-  return typeof value === "number" || typeof value === "bigint" ? String(value) : bytesToHex(raw);
+function expectedDisplay(value: string | number | bigint | boolean, raw: Uint8Array): string {
+  return typeof value === "number" || typeof value === "bigint" || typeof value === "boolean" ? String(value) : bytesToHex(raw);
 }
 
 function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {

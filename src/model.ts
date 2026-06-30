@@ -29,7 +29,18 @@ export interface IntegrityCheck {
 
 export interface ComputedCheck {
   expression: string;
+  derive?: ComputedDeriveStep[];
+  compare?: ComputedCompare;
   severity?: DiagnosticSeverity;
+}
+
+export type ComputedDeriveStep =
+  | { op: "slice"; start: number; end: number }
+  | { op: "u32le" | "le32" | "u32be" | "be32" };
+
+export interface ComputedCompare {
+  targetPath?: string;
+  mode?: "auto" | "numeric" | "raw-bytes";
 }
 
 export interface MagicRule {

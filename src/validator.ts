@@ -137,10 +137,36 @@ function validateRange(value: unknown, sourcePath: string, diagnostics: Registry
 function validateComputed(value: unknown, sourcePath: string, diagnostics: RegistryDiagnostic[]): void {
   if (value === undefined) return;
   if (!isRecord(value)) { diagnostics.push(diag(sourcePath, "field.computed must be an object.")); return; }
-  rejectUnknownKeys(value, new Set(["expression", "severity"]), sourcePath, diagnostics, "computed");
+  rejectUnknownKeys(value, new Set(["expression", "derive", "compare", "severity"]), sourcePath, diagnostics, "computed");
   if (typeof value.expression !== "string" || value.expression.length < 1 || value.expression.length > 512) diagnostics.push(diag(sourcePath, "field.computed.expression must be a non-empty string up to 512 characters."));
   if (typeof value.expression === "string" && !/^[A-Za-z0-9_().,:[\]\s+-]+$/.test(value.expression)) diagnostics.push(diag(sourcePath, "field.computed.expression contains unsupported characters."));
+  validateDerive(value.derive, sourcePath, diagnostics);
+  validateCompare(value.compare, sourcePath, diagnostics);
   if (value.severity !== undefined && (typeof value.severity !== "string" || !SEVERITIES.has(value.severity))) diagnostics.push(diag(sourcePath, "field.computed.severity is invalid."));
+}
+
+function validateDerive(value: unknown, sourcePath: string, diagnostics: RegistryDiagnostic[]): void {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) { diagnostics.push(diag(sourcePath, "field.computed.derive must be an array.")); return; }
+  if (value.length > 8) diagnostics.push(diag(sourcePath, "field.computed.derive must have at most 8 steps."));
+  for (const step of value) {
+    if (!isRecord(step)) { diagnostics.push(diag(sourcePath, "computed derive steps must be objects.")); continue; }
+    rejectUnknownKeys(step, new Set(["op", "start", "end"]), sourcePath, diagnostics, "derive");
+    if (!["slice", "u32le", "le32", "u32be", "be32"].includes(String(step.op))) diagnostics.push(diag(sourcePath, "derive.op is invalid."));
+    if (step.op === "slice") {
+      validateOptionalInteger(step.start, sourcePath, diagnostics, "derive.start", 0);
+      validateOptionalInteger(step.end, sourcePath, diagnostics, "derive.end", 0);
+      if (typeof step.start === "number" && typeof step.end === "number" && step.end < step.start) diagnostics.push(diag(sourcePath, "derive.end must not be less than derive.start."));
+    }
+  }
+}
+
+function validateCompare(value: unknown, sourcePath: string, diagnostics: RegistryDiagnostic[]): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) { diagnostics.push(diag(sourcePath, "field.computed.compare must be an object.")); return; }
+  rejectUnknownKeys(value, new Set(["targetPath", "mode"]), sourcePath, diagnostics, "compare");
+  if (value.targetPath !== undefined && (typeof value.targetPath !== "string" || !isFieldPath(value.targetPath))) diagnostics.push(diag(sourcePath, "compare.targetPath must be a field path."));
+  if (value.mode !== undefined && !["auto", "numeric", "raw-bytes"].includes(String(value.mode))) diagnostics.push(diag(sourcePath, "compare.mode is invalid."));
 }
 
 function validateMetadata(value: unknown, sourcePath: string, diagnostics: RegistryDiagnostic[], label: string): void {

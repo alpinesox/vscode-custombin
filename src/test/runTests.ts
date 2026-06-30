@@ -245,12 +245,14 @@ function testComputedDiagnostics(): void {
       { name: "key_block_len", type: "u8", offset: 0 },
       { name: "computedWord", type: "u32", offset: 1, endianness: "little", computed: { expression: "le32(sha384(slice(0x20, key_block_len))[0:4])" } },
       { name: "badComputedWord", type: "u32", offset: 5, endianness: "little", computed: { expression: "u32le(sha384(slice(0x20, key_block_len))[0:4])" } },
+      { name: "compareWord", type: "bytes", offset: 9, length: 0, computed: { expression: "sha384(slice(0x20, key_block_len))", derive: [{ op: "slice", start: 0, end: 4 }, { op: "u32le" }], compare: { targetPath: "computedWord", mode: "numeric" } } },
     ],
   };
   const validated = validateFormatDefinition(definition, "computed.json");
   assert.strictEqual(validated.diagnostics.length, 0);
   const result = parseBinary(bytes, definition, parseOptions);
   assert.ok(!result.diagnostics.some(item => item.path === "computedWord"));
+  assert.ok(!result.diagnostics.some(item => item.path === "compareWord"));
   assert.ok(result.diagnostics.some(item => item.path === "badComputedWord" && item.message.includes("computed mismatch")));
 }
 
