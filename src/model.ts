@@ -2,7 +2,17 @@ export type Endianness = "little" | "big";
 
 export type FieldType =
   | "u8" | "i8" | "u16" | "i16" | "u32" | "i32" | "u64" | "i64"
-  | "f32" | "f64" | "bytes" | "string" | "struct";
+  | "f32" | "f64" | "bytes" | "string" | "struct" | "section";
+
+export type Metadata = Record<string, string | number | boolean | null | string[]>;
+
+export interface FieldDependency {
+  path: string;
+  present?: boolean;
+  equals?: string | number | boolean;
+  notEquals?: string | number | boolean;
+  mask?: number;
+}
 
 export interface MagicRule {
   offset: number;
@@ -28,17 +38,30 @@ export interface FieldDefinition {
   encoding?: "ascii" | "utf8" | "utf16le" | "hex";
   trimNull?: boolean;
   count?: number;
+  repeatToEof?: boolean;
+  stride?: number;
+  itemLength?: number;
+  lengthFrom?: string;
   enum?: Record<string, string>;
   flags?: FlagDefinition[];
   children?: FieldDefinition[];
   format?: "decimal" | "hex" | "binary" | "timestamp-unix" | "raw";
   required?: boolean;
+  dependsOn?: FieldDependency | FieldDependency[];
+  meta?: Metadata;
 }
 
 export interface FormatDefinition {
   schemaVersion: 1;
   id: string;
   name: string;
+  title?: string;
+  summary?: string;
+  version?: string;
+  status?: string;
+  provenance?: string;
+  references?: string[];
+  meta?: Metadata;
   description?: string;
   fileExtensions?: string[];
   endianness?: Endianness;
@@ -69,6 +92,7 @@ export interface ParsedField {
   length: number;
   rawValue: string;
   displayValue: string;
+  meta?: Metadata;
   children?: ParsedField[];
   diagnostics: ParseDiagnostic[];
 }

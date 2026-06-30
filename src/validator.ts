@@ -1,8 +1,8 @@
 import { FormatDefinition, RegistryDiagnostic } from "./model";
 
-const SUPPORTED_TYPES = new Set(["u8", "i8", "u16", "i16", "u32", "i32", "u64", "i64", "f32", "f64", "bytes", "string", "struct"]);
-const TOP_LEVEL_KEYS = new Set(["schemaVersion", "id", "name", "description", "fileExtensions", "endianness", "confidence", "minSize", "maxSize", "magic", "fields"]);
-const FIELD_KEYS = new Set(["name", "label", "description", "offset", "type", "endianness", "length", "encoding", "trimNull", "count", "enum", "flags", "children", "format", "required"]);
+const SUPPORTED_TYPES = new Set(["u8", "i8", "u16", "i16", "u32", "i32", "u64", "i64", "f32", "f64", "bytes", "string", "struct", "section"]);
+const TOP_LEVEL_KEYS = new Set(["schemaVersion", "id", "name", "title", "summary", "version", "status", "provenance", "references", "meta", "description", "fileExtensions", "endianness", "confidence", "minSize", "maxSize", "magic", "fields"]);
+const FIELD_KEYS = new Set(["name", "label", "description", "offset", "type", "endianness", "length", "encoding", "trimNull", "count", "repeatToEof", "stride", "itemLength", "lengthFrom", "enum", "flags", "children", "format", "required", "dependsOn", "meta"]);
 const MAGIC_KEYS = new Set(["offset", "bytes", "required", "description"]);
 const ENCODINGS = new Set(["ascii", "utf8", "utf16le", "hex"]);
 const FORMATS = new Set(["decimal", "hex", "binary", "timestamp-unix", "raw"]);
@@ -16,6 +16,7 @@ export function validateFormatDefinition(value: unknown, sourcePath: string): { 
   if (value.schemaVersion !== 1) diagnostics.push(diag(sourcePath, "schemaVersion must be 1."));
   if (typeof value.id !== "string" || !/^[A-Za-z0-9_.-]+$/.test(value.id)) diagnostics.push(diag(sourcePath, "id must be a stable identifier."));
   if (typeof value.name !== "string" || value.name.length === 0) diagnostics.push(diag(sourcePath, "name is required."));
+  for (const key of ["title", "summary", "version", "status", "provenance", "description"]) validateOptionalString(value[key], sourcePath, diagnostics, key);
   if (!Array.isArray(value.fields) || value.fields.length === 0) diagnostics.push(diag(sourcePath, "fields must be a non-empty array."));
 
   const fields = Array.isArray(value.fields) ? value.fields : [];
@@ -24,6 +25,8 @@ export function validateFormatDefinition(value: unknown, sourcePath: string): { 
   if (fieldCount > MAX_FIELDS) diagnostics.push(diag(sourcePath, `Definition has ${fieldCount} fields; maximum is ${MAX_FIELDS}.`));
 
   validateStringArray(value.fileExtensions, sourcePath, diagnostics, "fileExtensions", /^\.[A-Za-z0-9_-]+$/);
+  validateStringArray(value.references, sourcePath, diagnostics, "references", /^.{1,2048}$/);
+  validateMetadata(value.meta, sourcePath, diagnostics, "meta");
   validateMagic(value.magic, sourcePath, diagnostics);
   validateOptionalInteger(value.minSize, sourcePath, diagnostics, "minSize", 0);
   validateOptionalInteger(value.maxSize, sourcePath, diagnostics, "maxSize", 0);
@@ -44,14 +47,19 @@ function validateField(value: unknown, sourcePath: string, diagnostics: Registry
   validateOptionalInteger(value.offset, sourcePath, diagnostics, "field.offset", 0);
   validateOptionalInteger(value.length, sourcePath, diagnostics, "field.length", 0, 1024 * 1024);
   validateOptionalInteger(value.count, sourcePath, diagnostics, "field.count", 0, 4096);
-  if (value.type === "string" && typeof value.length !== "number") diagnostics.push(diag(sourcePath, `String field ${String(value.name)} requires length.`));
-  if (value.type === "bytes" && typeof value.length !== "number") diagnostics.push(diag(sourcePath, `Bytes field ${String(value.name)} requires length.`));
-  if (value.type === "struct" && !Array.isArray(value.children)) diagnostics.push(diag(sourcePath, `Struct field ${String(value.name)} requires children.`));
+  validateOptionalInteger(value.stride, sourcePath, diagnostics, "field.stride", 1, 1024 * 1024);
+  validateOptionalInteger(value.itemLength, sourcePath, diagnostics, "field.itemLength", 1, 1024 * 1024);
+  if (value.repeatToEof !== undefined && typeof value.repeatToEof !== "boolean") diagnostics.push(diag(sourcePath, "field.repeatToEof must be boolean."));
+  if (value.lengthFrom !== undefined && (typeof value.lengthFrom !== "string" || !isFieldPath(value.lengthFrom))) diagnostics.push(diag(sourcePath, "field.lengthFrom must be a field path."));
+  if ((value.type === "string" || value.type === "bytes") && typeof value.length !== "number" && typeof value.lengthFrom !== "string") diagnostics.push(diag(sourcePath, `${String(value.type)} field ${String(value.name)} requires length or lengthFrom.`));
+  if ((value.type === "struct" || value.type === "section") && !Array.isArray(value.children)) diagnostics.push(diag(sourcePath, `${String(value.type)} field ${String(value.name)} requires children.`));
   if (value.endianness !== undefined && value.endianness !== "little" && value.endianness !== "big") diagnostics.push(diag(sourcePath, "field.endianness must be little or big."));
   if (value.encoding !== undefined && (typeof value.encoding !== "string" || !ENCODINGS.has(value.encoding))) diagnostics.push(diag(sourcePath, "field.encoding is invalid."));
   if (value.format !== undefined && (typeof value.format !== "string" || !FORMATS.has(value.format))) diagnostics.push(diag(sourcePath, "field.format is invalid."));
   if (value.trimNull !== undefined && typeof value.trimNull !== "boolean") diagnostics.push(diag(sourcePath, "field.trimNull must be boolean."));
   if (value.required !== undefined && typeof value.required !== "boolean") diagnostics.push(diag(sourcePath, "field.required must be boolean."));
+  validateDependsOn(value.dependsOn, sourcePath, diagnostics);
+  validateMetadata(value.meta, sourcePath, diagnostics, "field.meta");
   validateEnum(value.enum, sourcePath, diagnostics);
   validateFlags(value.flags, sourcePath, diagnostics);
   let count = 1;
@@ -84,6 +92,41 @@ function validateFlags(value: unknown, sourcePath: string, diagnostics: Registry
   }
 }
 
+function validateDependsOn(value: unknown, sourcePath: string, diagnostics: RegistryDiagnostic[]): void {
+  if (value === undefined) return;
+  const dependencies = Array.isArray(value) ? value : [value];
+  for (const dependency of dependencies) {
+    if (!isRecord(dependency)) { diagnostics.push(diag(sourcePath, "field.dependsOn entries must be objects.")); continue; }
+    rejectUnknownKeys(dependency, new Set(["path", "present", "equals", "notEquals", "mask"]), sourcePath, diagnostics, "dependsOn");
+    if (typeof dependency.path !== "string" || !isFieldPath(dependency.path)) diagnostics.push(diag(sourcePath, "dependsOn.path must be a field path."));
+    if (dependency.present !== undefined && typeof dependency.present !== "boolean") diagnostics.push(diag(sourcePath, "dependsOn.present must be boolean."));
+    if (dependency.mask !== undefined) validateOptionalInteger(dependency.mask, sourcePath, diagnostics, "dependsOn.mask", 0);
+    if (dependency.equals !== undefined && !isScalarComparable(dependency.equals)) diagnostics.push(diag(sourcePath, "dependsOn.equals must be a string, number, or boolean."));
+    if (dependency.notEquals !== undefined && !isScalarComparable(dependency.notEquals)) diagnostics.push(diag(sourcePath, "dependsOn.notEquals must be a string, number, or boolean."));
+  }
+}
+
+function validateMetadata(value: unknown, sourcePath: string, diagnostics: RegistryDiagnostic[], label: string): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) { diagnostics.push(diag(sourcePath, `${label} must be an object.`)); return; }
+  for (const [key, item] of Object.entries(value)) {
+    if (!/^[A-Za-z0-9_.-]{1,64}$/.test(key)) diagnostics.push(diag(sourcePath, `${label} key is invalid: ${key}.`));
+    if (!isMetadataValue(item)) diagnostics.push(diag(sourcePath, `${label}.${key} must be a scalar or string array.`));
+  }
+}
+
+function isMetadataValue(value: unknown): boolean {
+  return value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean" || (Array.isArray(value) && value.every(item => typeof item === "string"));
+}
+
+function isScalarComparable(value: unknown): boolean {
+  return typeof value === "string" || typeof value === "number" || typeof value === "boolean";
+}
+
+function isFieldPath(value: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*(?:\[\d+\])?(?:\.[A-Za-z_][A-Za-z0-9_]*(?:\[\d+\])?)*$/.test(value);
+}
+
 function validateMagic(value: unknown, sourcePath: string, diagnostics: RegistryDiagnostic[]): void {
   if (value === undefined) return;
   if (!Array.isArray(value)) { diagnostics.push(diag(sourcePath, "magic must be an array.")); return; }
@@ -106,6 +149,10 @@ function validateStringArray(value: unknown, sourcePath: string, diagnostics: Re
 function validateOptionalInteger(value: unknown, sourcePath: string, diagnostics: RegistryDiagnostic[], label: string, min: number, max = Number.MAX_SAFE_INTEGER): void {
   if (value === undefined) return;
   if (!Number.isInteger(value) || (value as number) < min || (value as number) > max) diagnostics.push(diag(sourcePath, `${label} must be an integer between ${min} and ${max}.`));
+}
+
+function validateOptionalString(value: unknown, sourcePath: string, diagnostics: RegistryDiagnostic[], label: string): void {
+  if (value !== undefined && typeof value !== "string") diagnostics.push(diag(sourcePath, `${label} must be a string.`));
 }
 
 function normalize(definition: FormatDefinition, sourcePath: string): FormatDefinition {

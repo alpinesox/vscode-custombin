@@ -9,6 +9,13 @@
     "schemaVersion": { "type": "integer", "const": 1 },
     "id": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+$" },
     "name": { "type": "string", "minLength": 1 },
+    "title": { "type": "string" },
+    "summary": { "type": "string" },
+    "version": { "type": "string" },
+    "status": { "type": "string" },
+    "provenance": { "type": "string" },
+    "references": { "type": "array", "items": { "type": "string", "minLength": 1 }, "default": [] },
+    "meta": { "$ref": "#/$defs/meta" },
     "description": { "type": "string" },
     "fileExtensions": {
       "type": "array",
@@ -52,13 +59,17 @@
         "description": { "type": "string" },
         "offset": { "type": "integer", "minimum": 0 },
         "type": {
-          "enum": ["u8", "i8", "u16", "i16", "u32", "i32", "u64", "i64", "f32", "f64", "bytes", "string", "struct"]
+          "enum": ["u8", "i8", "u16", "i16", "u32", "i32", "u64", "i64", "f32", "f64", "bytes", "string", "struct", "section"]
         },
         "endianness": { "enum": ["little", "big"] },
         "length": { "type": "integer", "minimum": 0, "maximum": 1048576 },
+        "lengthFrom": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\[\\d+\\])?(\\.[A-Za-z_][A-Za-z0-9_]*(\\[\\d+\\])?)*$" },
         "encoding": { "enum": ["ascii", "utf8", "utf16le", "hex"] },
         "trimNull": { "type": "boolean", "default": true },
         "count": { "type": "integer", "minimum": 0, "maximum": 4096 },
+        "repeatToEof": { "type": "boolean", "default": false },
+        "stride": { "type": "integer", "minimum": 1, "maximum": 1048576 },
+        "itemLength": { "type": "integer", "minimum": 1, "maximum": 1048576 },
         "enum": {
           "type": "object",
           "additionalProperties": { "type": "string" }
@@ -81,7 +92,38 @@
           "items": { "$ref": "#/$defs/field" }
         },
         "format": { "enum": ["decimal", "hex", "binary", "timestamp-unix", "raw"] },
-        "required": { "type": "boolean", "default": false }
+        "required": { "type": "boolean", "default": false },
+        "dependsOn": {
+          "oneOf": [
+            { "$ref": "#/$defs/dependency" },
+            { "type": "array", "items": { "$ref": "#/$defs/dependency" }, "minItems": 1 }
+          ]
+        },
+        "meta": { "$ref": "#/$defs/meta" }
+      }
+    },
+    "dependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path"],
+      "properties": {
+        "path": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\[\\d+\\])?(\\.[A-Za-z_][A-Za-z0-9_]*(\\[\\d+\\])?)*$" },
+        "present": { "type": "boolean" },
+        "equals": { "type": ["string", "number", "boolean"] },
+        "notEquals": { "type": ["string", "number", "boolean"] },
+        "mask": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "meta": {
+      "type": "object",
+      "additionalProperties": {
+        "oneOf": [
+          { "type": "string" },
+          { "type": "number" },
+          { "type": "boolean" },
+          { "type": "null" },
+          { "type": "array", "items": { "type": "string" } }
+        ]
       }
     }
   }

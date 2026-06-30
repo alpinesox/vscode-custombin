@@ -32,10 +32,20 @@ export function buildWebviewHtml(webview: vscode.Webview, extensionUri: vscode.U
 
 export function serializeCandidates(candidates: CandidateResult[], selectedId: string | undefined, registryDiagnostics: RegistryDiagnostic[]): unknown {
   const selected = candidates.find(candidate => candidate.definition.id === selectedId) ?? candidates[0];
+  const metadata = selected ? {
+    title: selected.definition.title,
+    summary: selected.definition.summary ?? selected.definition.description,
+    version: selected.definition.version,
+    status: selected.definition.status,
+    provenance: selected.definition.provenance,
+    confidence: selected.definition.confidence,
+    references: selected.definition.references,
+    meta: selected.definition.meta,
+  } : undefined;
   return {
     candidates: candidates.map(candidate => ({ id: candidate.definition.id, name: candidate.definition.name, score: candidate.score, reasons: candidate.reasons })),
     selectedId: selected?.definition.id,
-    selected: selected ? { id: selected.definition.id, name: selected.definition.name, score: selected.score, reasons: selected.reasons, result: selected.result } : undefined,
+    selected: selected ? { id: selected.definition.id, name: selected.definition.name, score: selected.score, reasons: selected.reasons, metadata, result: selected.result } : undefined,
     registryDiagnostics,
   };
 }

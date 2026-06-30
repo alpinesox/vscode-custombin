@@ -148,6 +148,52 @@ function testParseBudgets(): void {
   assert.strictEqual(rawResult.fields[1]?.rawValue, "<truncated>");
 }
 
+function testLengthFromRepeatAndStride(): void {
+  const bytes = new Uint8Array([3, 65, 66, 67, 1, 9, 0, 0, 2, 8, 0, 0]);
+  const definition: FormatDefinition = {
+    schemaVersion: 1,
+    id: "test.indirection",
+    name: "Indirection",
+    fields: [
+      { name: "nameLength", type: "u8" },
+      { name: "name", type: "string", lengthFrom: "nameLength", encoding: "ascii" },
+      { name: "entries", type: "struct", repeatToEof: true, itemLength: 4, children: [{ name: "kind", type: "u8" }, { name: "value", type: "u8" }] },
+    ],
+  };
+  const result = parseBinary(bytes, definition, parseOptions);
+  assert.strictEqual(result.diagnostics.length, 0);
+  assert.strictEqual(result.fields[1]?.displayValue, "ABC");
+  assert.strictEqual(result.fields[2]?.children?.length, 2);
+  assert.strictEqual(result.fields[2]?.children?.[1]?.offset, 8);
+  assert.strictEqual(result.bytesConsumed, 12);
+}
+
+function testSectionsDependsOnAndMetadata(): void {
+  const definition: FormatDefinition = {
+    schemaVersion: 1,
+    id: "test.sections",
+    name: "Sections",
+    title: "Section Test",
+    summary: "Exercises sections and metadata.",
+    version: "1.0",
+    status: "draft",
+    provenance: "unit-test",
+    references: ["local"],
+    meta: { owner: "tests", tags: ["section", "metadata"] },
+    fields: [
+      { name: "flags", type: "u8" },
+      { name: "header", type: "section", label: "Header", meta: { source: "spec" }, children: [{ name: "enabled", type: "u8", dependsOn: { path: "flags", mask: 1 } }, { name: "skipped", type: "u8", dependsOn: { path: "flags", equals: 0 } }] },
+    ],
+  };
+  const validated = validateFormatDefinition(definition, "sections.json");
+  assert.strictEqual(validated.diagnostics.length, 0);
+  const result = parseBinary(new Uint8Array([1, 7, 9]), definition, parseOptions);
+  assert.strictEqual(result.fields[1]?.type, "section");
+  assert.strictEqual(result.fields[1]?.children?.length, 1);
+  assert.strictEqual(result.fields[1]?.children?.[0]?.displayValue, "7");
+  assert.deepStrictEqual(result.fields[1]?.meta, { source: "spec" });
+}
+
 function testMatching(): void {
   const magicDef: FormatDefinition = { ...toyDefinition, id: "test.magic", name: "Magic", magic: [{ offset: 0, bytes: "0100" }] };
   const candidates = matchFormats(toyBytes(), "sample.toybin", [toyDefinition, magicDef], parseOptions);
@@ -179,6 +225,8 @@ function run(): void {
   testMatching();
   testOptionalMagicDoesNotExclude();
   testParseBudgets();
+  testLengthFromRepeatAndStride();
+  testSectionsDependsOnAndMetadata();
   testValidation();
   console.log("All tests passed");
 }

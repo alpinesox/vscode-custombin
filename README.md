@@ -11,7 +11,11 @@ It is intentionally generic. It does not contain certificate, key, ASN.1, or oth
 - Extension, magic/header, size, and structural matching.
 - Parser override dropdown when more than one candidate matches.
 - Endian-aware primitive parsing.
-- Fixed strings, bytes, arrays, structs, enums, and bit flags.
+- Fixed strings, bytes, arrays, structs, sections, enums, and bit flags.
+- Repeated fixed-size entries with `count`, `repeatToEof`, `itemLength`, and `stride`.
+- Length indirection with `lengthFrom` for strings, bytes, and arrays.
+- Conditional fields with `dependsOn`.
+- Top-level and field-level metadata rendered in the viewer.
 - Required field markers are validated today and reserved for stricter matching policies in a future schema revision.
 - UTF-8, ASCII, UTF-16LE, and hex string decoding.
 - Offset, length, field name, type, decoded value, raw bytes, and tooltip descriptions.
@@ -31,13 +35,20 @@ uint16, uint16, str(64), uint32, uint8
   "schemaVersion": 1,
   "id": "sample.toy-record",
   "name": "Toy Record",
+  "title": "Toy Record Layout",
+  "summary": "Example fixed-width toy record.",
+  "version": "1.0",
+  "status": "example",
+  "provenance": "Bundled sample definition.",
+  "references": ["README example"],
+  "meta": { "owner": "sample", "confidenceNote": "Illustrative only" },
   "fileExtensions": [".toybin", ".bin"],
   "endianness": "little",
   "minSize": 73,
   "fields": [
     { "name": "version", "type": "u16", "description": "Record format version." },
     { "name": "flags", "type": "u16", "format": "hex" },
-    { "name": "name", "type": "string", "length": 64, "encoding": "utf8" },
+    { "name": "name", "type": "string", "length": 64, "encoding": "utf8", "meta": { "source": "record header" } },
     { "name": "payloadLength", "type": "u32" },
     { "name": "status", "type": "u8", "enum": { "1": "Ready" } }
   ]
@@ -62,18 +73,30 @@ Magic rules are required by default. A required magic rule that does not match e
 
 Definitions use schema version `1` and are validated against `schemas/custombin-format.schema.json` plus equivalent runtime checks.
 
-Supported primitive field types are `u8`, `i8`, `u16`, `i16`, `u32`, `i32`, `u64`, `i64`, `f32`, and `f64`. Compound field types are `bytes`, `string`, and `struct`. A field can include `count` to render a fixed-size array.
+Supported primitive field types are `u8`, `i8`, `u16`, `i16`, `u32`, `i32`, `u64`, `i64`, `f32`, and `f64`. Compound field types are `bytes`, `string`, `struct`, and `section`. A `section` groups child fields without adding bytes of its own, which is useful for labels such as root header, key block, or signature block.
 
 The default endianness is `little`. Set top-level `endianness` to change the default for the definition, or set field-level `endianness` to override one numeric field.
 
-String fields require `length` and support these encodings:
+String and bytes fields require either `length` or `lengthFrom`. `length` is an explicit byte count. `lengthFrom` reads a previously parsed field path and uses its numeric value as the byte count.
+
+String fields support these encodings:
 
 - `utf8`
 - `ascii`
 - `utf16le`
 - `hex`
 
-Bytes fields also require `length`. Both string and bytes reads are bounds checked.
+Both string and bytes reads are bounds checked.
+
+Arrays can use one of these controls:
+
+- `count`: parse a fixed number of items.
+- `lengthFrom`: parse a number of items from a previously parsed field path.
+- `repeatToEof`: repeat until the end of the file.
+
+Use `itemLength` for fixed-size records and `stride` when each item begins at a predictable distance from the previous item. For example, an appended table with 256-byte records can use `repeatToEof: true` and `itemLength: 256`.
+
+Fields can include explicit `offset` values even when sequential parsing would work. Prefer explicit `offset` and `length` values when they make the format definition clearer or align with an external specification.
 
 Display `format` can be:
 
@@ -85,7 +108,11 @@ Display `format` can be:
 
 `hex` and `binary` display the raw bytes read for the field, so signed negative values are shown as their fixed-width byte representation rather than JavaScript's signed string form.
 
-Fields can include `enum` mappings from integer strings to labels, and `flags` arrays with integer masks and labels. Set `description` on definitions, magic rules, fields, and flags to provide tooltips or diagnostics context.
+Fields can include `enum` mappings from integer strings to labels, and `flags` arrays with integer masks and labels. Use `dependsOn` to parse a field only when another field path is present, equal to a value, not equal to a value, or has a bit mask set.
+
+Set `description` on definitions, magic rules, fields, and flags to provide tooltips or diagnostics context.
+
+Top-level definitions can include `title`, `summary`, `version`, `status`, `provenance`, `references`, and `meta`. Each field can also include `meta`. The viewer renders top-level metadata in a metadata section and field metadata in row tooltips. `meta` accepts string, number, boolean, null, or string-array values so definitions can carry source-specific metadata without changing the schema.
 
 ## Safety limits
 
