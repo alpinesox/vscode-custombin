@@ -130,9 +130,15 @@ function parseArray(
 
 function decodeString(bytes: Uint8Array, encoding: string, trimNull: boolean): string {
   if (encoding === "hex") return bytesToHex(bytes, " ");
-  const decoder = new TextDecoder(encoding === "ascii" ? "latin1" : encoding, { fatal: false });
+  const decoder = new TextDecoder(textDecoderEncoding(encoding), { fatal: false });
   const text = decoder.decode(bytes);
   return trimNull ? text.replace(/\0+$/g, "") : text;
+}
+
+function textDecoderEncoding(encoding: string): string {
+  if (encoding === "ascii") return "latin1";
+  if (encoding === "utf16le") return "utf-16le";
+  return encoding;
 }
 
 function formatValue(value: string | number | bigint, field: FieldDefinition, raw: Uint8Array): string {
@@ -152,7 +158,7 @@ function flagActive(value: number | bigint, mask: number): boolean {
 
 function formatPrimitive(value: string | number | bigint, field: FieldDefinition, raw: Uint8Array): string {
   if (field.format === "hex") return `0x${bytesToHex(raw)}`;
-  if (field.format === "binary" && typeof value === "number") return `0b${value.toString(2)}`;
+  if (field.format === "binary" && (typeof value === "number" || typeof value === "bigint")) return `0b${value.toString(2)}`;
   if (field.format === "timestamp-unix" && (typeof value === "number" || typeof value === "bigint")) return new Date(Number(value) * 1000).toISOString();
   return String(value);
 }

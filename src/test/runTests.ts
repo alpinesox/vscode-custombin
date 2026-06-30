@@ -77,6 +77,49 @@ function testExplicitOffsetArray(): void {
   assert.strictEqual(result.fields[0]?.length, 3);
 }
 
+function testEndianOffsetsAndLargeIntegers(): void {
+  const bytes = new Uint8Array(22);
+  const view = new DataView(bytes.buffer);
+  view.setUint16(1, 0x1234, false);
+  view.setBigUint64(3, 0x0102030405060708n, false);
+  view.setBigInt64(11, -2n, true);
+  view.setUint8(19, 0x0f);
+  const definition: FormatDefinition = {
+    schemaVersion: 1,
+    id: "test.endian-offsets",
+    name: "Endian Offsets",
+    endianness: "big",
+    fields: [
+      { name: "padding", type: "u8" },
+      { name: "big", type: "u16", format: "hex" },
+      { name: "large", type: "u64" },
+      { name: "negative", type: "i64", endianness: "little" },
+      { name: "bits", type: "u8", format: "binary" },
+    ],
+  };
+  const result = parseBinary(bytes, definition, { maxArrayItems: 16 });
+  assert.strictEqual(result.diagnostics.length, 0);
+  assert.strictEqual(result.fields[1]?.displayValue, "0x1234");
+  assert.strictEqual(result.fields[2]?.displayValue, "72623859790382856");
+  assert.strictEqual(result.fields[3]?.displayValue, "-2");
+  assert.strictEqual(result.fields[4]?.displayValue, "0b1111");
+}
+
+function testUtf16String(): void {
+  const bytes = new Uint8Array([0x48, 0x00, 0x69, 0x00, 0x00, 0x00]);
+  const definition: FormatDefinition = { schemaVersion: 1, id: "test.utf16", name: "UTF-16", fields: [{ name: "text", type: "string", length: 6, encoding: "utf16le" }] };
+  const result = parseBinary(bytes, definition, { maxArrayItems: 16 });
+  assert.strictEqual(result.diagnostics.length, 0);
+  assert.strictEqual(result.fields[0]?.displayValue, "Hi");
+}
+
+function testOptionalMagicDoesNotExclude(): void {
+  const definition: FormatDefinition = { ...toyDefinition, id: "test.optional-magic", name: "Optional Magic", magic: [{ offset: 0, bytes: "FFFF", required: false }] };
+  const candidates = matchFormats(toyBytes(), "sample.toybin", [definition], { maxArrayItems: 128 });
+  assert.strictEqual(candidates.length, 1);
+  assert.strictEqual(candidates[0]?.definition.id, "test.optional-magic");
+}
+
 function testMatching(): void {
   const magicDef: FormatDefinition = { ...toyDefinition, id: "test.magic", name: "Magic", magic: [{ offset: 0, bytes: "0100" }] };
   const candidates = matchFormats(toyBytes(), "sample.toybin", [toyDefinition, magicDef], { maxArrayItems: 128 });
@@ -102,7 +145,10 @@ function run(): void {
   testBounds();
   testStructAndArrayCursor();
   testExplicitOffsetArray();
+  testEndianOffsetsAndLargeIntegers();
+  testUtf16String();
   testMatching();
+  testOptionalMagicDoesNotExclude();
   testValidation();
   console.log("All tests passed");
 }

@@ -6,6 +6,7 @@ import { FormatRegistry } from "./registry";
 import { buildWebviewHtml, serializeCandidates } from "./webview";
 
 let registry: FormatRegistry;
+let activeCustomBinUri: vscode.Uri | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   registry = new FormatRegistry(context.extensionUri);
@@ -14,12 +15,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registry.watch();
   context.subscriptions.push(CustomBinEditorProvider.register(context, registry));
   context.subscriptions.push(vscode.commands.registerCommand("custombin.open", async (uri?: vscode.Uri) => {
-    const target = uri ?? vscode.window.activeTextEditor?.document.uri;
+    const target = uri ?? vscode.window.activeTextEditor?.document.uri ?? activeCustomBinUri;
     if (!target) { await vscode.window.showWarningMessage("No file selected."); return; }
     await vscode.commands.executeCommand("vscode.openWith", target, CustomBinEditorProvider.viewType);
   }));
   context.subscriptions.push(vscode.commands.registerCommand("custombin.selectFormat", async (uri?: vscode.Uri) => {
-    const target = uri ?? vscode.window.activeTextEditor?.document.uri;
+    const target = uri ?? vscode.window.activeTextEditor?.document.uri ?? activeCustomBinUri;
     if (!target) { await vscode.window.showWarningMessage("Open a file before selecting a Custom Binary Viewer format."); return; }
     const picked = await vscode.window.showQuickPick(registry.all.map(format => ({ label: format.name, description: format.id, format })), { placeHolder: "Select Custom Binary Viewer format" });
     if (!picked) return;
@@ -57,6 +58,10 @@ class CustomBinEditorProvider implements vscode.CustomReadonlyEditorProvider {
 
   async resolveCustomEditor(document: vscode.CustomDocument, panel: vscode.WebviewPanel): Promise<void> {
     panel.webview.options = { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, "media")] };
+    if (panel.active) activeCustomBinUri = document.uri;
+    panel.onDidChangeViewState(event => {
+      if (event.webviewPanel.active) activeCustomBinUri = document.uri;
+    });
     let selectedId: string | undefined = this.context.workspaceState.get<string>(overrideKey(document.uri));
     const render = async (): Promise<void> => {
       try {
