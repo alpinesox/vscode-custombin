@@ -28,6 +28,11 @@ export class FormatRegistry implements vscode.Disposable {
     if (uris.length > MAX_FORMAT_FILES) diagnostics.push({ severity: "warning", message: `Loaded first ${MAX_FORMAT_FILES} format definition files; ${uris.length - MAX_FORMAT_FILES} skipped.` });
     for (const uri of uris.slice(0, MAX_FORMAT_FILES)) {
       try {
+        const stat = await vscode.workspace.fs.stat(uri);
+        if (stat.size > MAX_FORMAT_FILE_BYTES) {
+          diagnostics.push({ severity: "error", message: `Format definition file exceeds ${MAX_FORMAT_FILE_BYTES} bytes and was skipped.`, sourcePath: uri.fsPath });
+          continue;
+        }
         const bytes = await vscode.workspace.fs.readFile(uri);
         if (bytes.byteLength > MAX_FORMAT_FILE_BYTES) {
           diagnostics.push({ severity: "error", message: `Format definition file exceeds ${MAX_FORMAT_FILE_BYTES} bytes and was skipped.`, sourcePath: uri.fsPath });
@@ -60,7 +65,7 @@ export class FormatRegistry implements vscode.Disposable {
     watcher.onDidChange(() => { void this.load(); });
     watcher.onDidDelete(() => { void this.load(); });
     for (const entry of configuredFormatPaths().slice(0, MAX_FORMAT_PATHS)) {
-      for (const root of formatPathRoots(entry)) this.watchers.push(watchExternalPath(root, () => { void this.load(); }));
+      for (const root of formatPathRoots(entry)) this.watchers.push(watchExternalPath(root, () => { void this.load().then(() => { this.watch(); }); }));
     }
   }
 
@@ -116,11 +121,32 @@ function watchExternalPath(root: string, onChange: () => void): vscode.Disposabl
     timer = setTimeout(onChange, 250);
   };
   try {
-    const watcher = fs.watch(parsed.root, { recursive: true }, trigger);
-    return { dispose: (): void => { if (timer) clearTimeout(timer); watcher.close(); } };
+    const watchRoot = fs.existsSync(parsed.root) && fs.statSync(parsed.root).isFile() ? path.dirname(parsed.root) : parsed.root;
+    const recursive = fs.existsSync(watchRoot) && fs.statSync(watchRoot).isDirectory();
+    let watchers: fs.FSWatcher[];
+    try {
+      watchers = [fs.watch(watchRoot, { recursive }, trigger)];
+    } catch {
+      watchers = collectWatchRoots(watchRoot, 0).map(item => fs.watch(item, trigger));
+    }
+    return { dispose: (): void => { if (timer) clearTimeout(timer); watchers.forEach(watcher => { watcher.close(); }); } };
   } catch {
     return { dispose: (): void => { if (timer) clearTimeout(timer); } };
   }
+}
+
+function collectWatchRoots(root: string, depth: number): string[] {
+  if (depth > MAX_FORMAT_PATH_DEPTH || !fs.existsSync(root)) return [];
+  let stat: fs.Stats;
+  try { stat = fs.statSync(root); } catch { return []; }
+  if (!stat.isDirectory()) return [path.dirname(root)];
+  const roots = [root];
+  let entries: fs.Dirent[];
+  try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { return roots; }
+  for (const entry of entries) {
+    if (entry.isDirectory() && !entry.name.includes("/") && !entry.name.includes("\\")) roots.push(...collectWatchRoots(`${root}${path.sep}${entry.name}`, depth + 1));
+  }
+  return roots;
 }
 
 function workspaceRootPaths(): string[] {
@@ -157,6 +183,12 @@ function parseFormatPath(value: string): { root: string; matcher: (relativePath:
 async function collectFormatFiles(root: vscode.Uri, matcher: (relativePath: string, isDirectory: boolean) => boolean, depth: number, relativePath = ""): Promise<vscode.Uri[]> {
   if (depth > MAX_FORMAT_PATH_DEPTH) return [];
   const uris: vscode.Uri[] = [];
+  if (depth === 0) {
+    try {
+      const stat = await vscode.workspace.fs.stat(root);
+      if (stat.type === vscode.FileType.File) return matcher(path.basename(root.fsPath), false) ? [root] : [];
+    } catch { return []; }
+  }
   let entries: [string, vscode.FileType][];
   try { entries = await vscode.workspace.fs.readDirectory(root); } catch { return []; }
   for (const [name, type] of entries) {

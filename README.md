@@ -26,7 +26,7 @@ It is intentionally generic. It does not contain certificate, key, ASN.1, or oth
 
 ## Format definition example
 
-The bundled sample describes this layout:
+The repository includes a sample definition that describes this layout. The sample is not loaded as a built-in runtime parser; copy it into a workspace `extensions` or `formats` folder, or reference it with `custombin.formatPaths`, to use it.
 
 ```text
 uint16, uint16, str(64), uint32, uint8
@@ -231,7 +231,7 @@ These limits are configurable up to larger hard ceilings intended to protect the
 
 VS Code custom editor selectors are contributed statically from `package.json`. Runtime JSON definitions cannot dynamically add new custom editor selectors. This extension therefore contributes a broad optional custom editor and works best through **Open With...** or the `Custom Binary Viewer: Open` command. You can use VS Code `workbench.editorAssociations` manually if you want specific extensions to open with this viewer by default.
 
-The extension registers a broad default custom editor selector so files with unrecognized extensions can open in Custom Binary Viewer without requiring a per-extension contribution. VS Code may still prefer a more specific editor contributed by VS Code or another extension.
+The extension does not claim files by default. This avoids hijacking normal text or extension-specific editors for files that only happen to match `*`.
 
 ## Format discovery
 

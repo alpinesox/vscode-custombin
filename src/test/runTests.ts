@@ -137,9 +137,9 @@ function testParseBudgets(): void {
     schemaVersion: 1,
     id: "test.budget",
     name: "Budget",
-    fields: [{ name: "outer", type: "struct", count: 16, children: [{ name: "inner", type: "string", length: 0, count: 16 }] }],
+    fields: [{ name: "outer", type: "struct", count: 16, children: [{ name: "inner", type: "u8", count: 16 }] }],
   };
-  const result = parseBinary(new Uint8Array(1), nested, { maxArrayItems: 16, maxRenderedFields: 10, maxRawDisplayBytes: 16 });
+  const result = parseBinary(new Uint8Array(512), nested, { maxArrayItems: 16, maxRenderedFields: 10, maxRawDisplayBytes: 16 });
   assert.ok(result.diagnostics.some(item => item.message.includes("rendered field limit")));
   assert.ok((result.fields[0]?.children?.length ?? 0) < 16);
 
@@ -147,6 +147,12 @@ function testParseBudgets(): void {
   const rawResult = parseBinary(new Uint8Array([1, 2, 3, 4]), raw, { maxArrayItems: 16, maxRenderedFields: 10, maxRawDisplayBytes: 3 });
   assert.strictEqual(rawResult.fields[0]?.rawValue, "01 02 03 ... <truncated>");
   assert.strictEqual(rawResult.fields[1]?.rawValue, "<truncated>");
+
+  const largeScalar: FormatDefinition = { schemaVersion: 1, id: "test.large-scalar", name: "Large Scalar", fields: [{ name: "tail", type: "bytes", repeatToEof: true }, { name: "text", type: "string", offset: 0, repeatToEof: true }] };
+  const largeResult = parseBinary(new Uint8Array([65, 66, 67, 68, 69, 70]), largeScalar, { maxArrayItems: 16, maxRenderedFields: 10, maxRawDisplayBytes: 3 });
+  assert.strictEqual(largeResult.fields[0]?.rawValue, "41 42 43 ... <truncated>");
+  assert.strictEqual(largeResult.fields[0]?.displayValue, "41 42 43 ... <truncated>");
+  assert.ok(largeResult.fields[1]?.displayValue.includes("<truncated>"));
 }
 
 function testLengthFromRepeatAndStride(): void {
@@ -194,6 +200,10 @@ function testSectionsDependsOnAndMetadata(): void {
   assert.strictEqual(result.fields[1]?.children?.length, 1);
   assert.strictEqual(result.fields[1]?.children?.[0]?.displayValue, "7");
   assert.deepStrictEqual(result.fields[1]?.meta, { source: "spec" });
+
+  const repeatedEmptySection: FormatDefinition = { schemaVersion: 1, id: "test.empty-section-repeat", name: "Empty Section Repeat", fields: [{ name: "empty", type: "section", repeatToEof: true }] };
+  const repeatedResult = parseBinary(new Uint8Array([1, 2, 3]), repeatedEmptySection, parseOptions);
+  assert.ok(repeatedResult.diagnostics.some(item => item.message.includes("did not consume bytes")));
 }
 
 function testConsumeRemainingAndSiblingLength(): void {
@@ -307,6 +317,11 @@ function testValidation(): void {
   const partial = validateFormatDefinition({ schemaVersion: 1, id: "test.partial", name: "Partial", fields: [{ name: "x", type: "bad" }, { name: "y", type: "u8" }] }, "partial.json");
   assert.ok(partial.definition);
   assert.ok(partial.diagnostics.some(item => item.message.includes("Unsupported field type")));
+
+  const malformedValidation = validateFormatDefinition({ schemaVersion: 1, id: "test.malformed-validation", name: "Malformed Validation", fields: [{ name: "x", type: "u8", checksum: {} }] }, "malformed.json");
+  assert.ok(malformedValidation.definition);
+  const malformedResult = parseBinary(new Uint8Array([1]), malformedValidation.definition!, parseOptions);
+  assert.ok(malformedResult.diagnostics.some(item => item.message.includes("metadata is invalid")));
 }
 
 function run(): void {

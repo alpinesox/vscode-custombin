@@ -48,7 +48,7 @@
             "filenamePattern": "*"
           }
         ],
-        "priority": "default"
+        "priority": "option"
       }
     ],
     "jsonValidation": [

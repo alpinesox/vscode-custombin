@@ -7,6 +7,7 @@ import { buildWebviewHtml, serializeCandidates } from "./webview";
 
 let registry: FormatRegistry;
 let activeCustomBinUri: vscode.Uri | undefined;
+const settingWarningsShown = new Set<string>();
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   registry = new FormatRegistry(context.extensionUri);
@@ -90,6 +91,7 @@ class CustomBinEditorProvider implements vscode.CustomReadonlyEditorProvider {
         await render();
       } else if (isReloadMessage(message)) {
         await this.registry.load();
+        this.registry.watch();
         await render();
       }
     }));
@@ -104,6 +106,7 @@ class CustomBinEditorProvider implements vscode.CustomReadonlyEditorProvider {
     const stat = await vscode.workspace.fs.stat(uri);
     if (stat.size > maxFileBytes) throw new Error(`File is ${stat.size} bytes; custombin.maxFileBytes is ${maxFileBytes}. Increase custombin.maxFileBytes to parse this file.`);
     const bytes = await vscode.workspace.fs.readFile(uri);
+    if (bytes.byteLength > maxFileBytes) throw new Error(`File is ${bytes.byteLength} bytes after read; custombin.maxFileBytes is ${maxFileBytes}. Increase custombin.maxFileBytes to parse this file.`);
     return matchFormats(bytes, path.basename(uri.fsPath), this.registry.all, { maxArrayItems, maxRenderedFields, maxRawDisplayBytes });
   }
 }
@@ -111,15 +114,21 @@ class CustomBinEditorProvider implements vscode.CustomReadonlyEditorProvider {
 function getIntegerSetting(config: vscode.WorkspaceConfiguration, key: string, min: number, max: number, fallback: number): number {
   const value = config.get<number>(key);
   if (!Number.isInteger(value)) {
-    void vscode.window.showWarningMessage(`custombin.${key} must be an integer; using default ${fallback}.`);
+    showSettingWarningOnce(`custombin.${key}:not-integer`, `custombin.${key} must be an integer; using default ${fallback}.`);
     return fallback;
   }
   if ((value as number) < min || (value as number) > max) {
     const clamped = Math.max(min, Math.min(max, value as number));
-    void vscode.window.showWarningMessage(`custombin.${key}=${value} is outside ${min}-${max}; using ${clamped}.`);
+    showSettingWarningOnce(`custombin.${key}:range:${value}`, `custombin.${key}=${value} is outside ${min}-${max}; using ${clamped}.`);
     return clamped;
   }
   return value as number;
+}
+
+function showSettingWarningOnce(id: string, message: string): void {
+  if (settingWarningsShown.has(id)) return;
+  settingWarningsShown.add(id);
+  void vscode.window.showWarningMessage(message);
 }
 
 function isSelectFormatMessage(message: unknown): message is { command: "selectFormat"; formatId: string } {

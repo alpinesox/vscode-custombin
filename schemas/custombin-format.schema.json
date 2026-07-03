@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/alpinesox/vscode-custombin/main/schemas/custombin-format.schema.json",
+  "$id": "urn:custombin:format-schema:1",
   "title": "Custom Binary Viewer Format",
   "type": "object",
   "additionalProperties": false,
@@ -18,7 +18,7 @@
     "version": { "type": "string" },
     "status": { "type": "string" },
     "provenance": { "type": "string" },
-    "references": { "type": "array", "items": { "type": "string", "minLength": 1 }, "default": [] },
+    "references": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 2048 }, "default": [] },
     "meta": { "$ref": "#/$defs/meta" },
     "description": { "type": "string" },
     "fileExtensions": {
@@ -50,7 +50,8 @@
     "fields": {
       "type": "array",
       "items": { "$ref": "#/$defs/field" },
-      "minItems": 1
+      "minItems": 1,
+      "maxItems": 4096
     }
   },
   "$defs": {
@@ -68,14 +69,14 @@
           "enum": ["u8", "i8", "u16", "i16", "u32", "i32", "u64", "i64", "f32", "f64", "bytes", "string", "struct", "section"]
         },
         "endianness": { "enum": ["little", "big"] },
-        "length": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+        "length": { "type": "integer", "minimum": 0, "maximum": 1048576 },
         "lengthFrom": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\[\\d+\\])?(\\.[A-Za-z_][A-Za-z0-9_]*(\\[\\d+\\])?)*$" },
         "encoding": { "enum": ["ascii", "utf8", "utf16le", "hex"] },
         "trimNull": { "type": "boolean", "default": true },
-        "count": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+        "count": { "type": "integer", "minimum": 0, "maximum": 4096 },
         "repeatToEof": { "type": "boolean", "default": false },
         "stride": { "type": "integer", "minimum": 1, "maximum": 1048576 },
-        "itemLength": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+        "itemLength": { "type": "integer", "minimum": 1, "maximum": 1048576 },
         "enum": {
           "type": "object",
           "additionalProperties": { "type": "string" }
@@ -96,7 +97,8 @@
         },
         "children": {
           "type": "array",
-          "items": { "$ref": "#/$defs/field" }
+          "items": { "$ref": "#/$defs/field" },
+          "maxItems": 4096
         },
         "format": { "enum": ["decimal", "hex", "binary", "timestamp-unix", "raw"] },
         "required": { "type": "boolean", "default": false },
@@ -183,7 +185,7 @@
       "properties": {
         "offset": { "type": "integer", "minimum": 0 },
         "offsetFrom": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\[\\d+\\])?(\\.[A-Za-z_][A-Za-z0-9_]*(\\[\\d+\\])?)*$" },
-        "length": { "type": "integer", "minimum": 0 },
+        "length": { "type": "integer", "minimum": 0, "maximum": 104857600 },
         "lengthFrom": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\[\\d+\\])?(\\.[A-Za-z_][A-Za-z0-9_]*(\\[\\d+\\])?)*$" }
       },
       "oneOf": [
@@ -216,6 +218,7 @@
     },
     "meta": {
       "type": "object",
+      "propertyNames": { "pattern": "^[A-Za-z0-9_.-]{1,64}$" },
       "additionalProperties": {
         "oneOf": [
           { "type": "string" },

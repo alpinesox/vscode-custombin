@@ -2,6 +2,8 @@ import * as crypto from "crypto";
 import { BinaryReader, bytesToHex } from "./binaryReader";
 import { ComputedCheck, DataRange, FieldDefinition, FormatDefinition, IntegrityCheck, ParsedField, ParseDiagnostic, ParseResult } from "./model";
 
+const MAX_SEMANTIC_STRING_BYTES = 1024 * 1024;
+
 export interface ParseOptions { maxArrayItems: number; maxRenderedFields: number; maxRawDisplayBytes: number }
 
 interface ParseBudget {
@@ -86,7 +88,7 @@ function parseField(
 }
 
 function parseScalarField(context: ParseContext, field: FieldDefinition, offset: number, path: string, label: string, diagnostics: ParseDiagnostic[]): ParsedField {
-  const parsed = parseScalar(context, field, offset, path);
+  const parsed = parseScalar(context, field, offset, path, diagnostics);
   context.values.set(path, parsed.value);
   context.rawValues.set(path, parsed.raw);
   const rawValue = formatRawValue(parsed.raw, path, offset, context.rootDiagnostics, context.budget);
@@ -100,22 +102,24 @@ function parseScalarField(context: ParseContext, field: FieldDefinition, offset:
     offset,
     length: parsed.length,
     rawValue,
-    displayValue: field.type === "bytes" ? rawValue : formatValue(parsed.value, field, parsed.raw),
+    displayValue: parsed.displayValue ?? (field.type === "bytes" ? rawValue : formatValue(parsed.value, field, parsed.raw)),
     meta: field.meta,
     diagnostics,
   };
 }
 
-function parseScalar(context: ParseContext, field: FieldDefinition, offset: number, path: string): { value: string | number | bigint; length: number; raw: Uint8Array } {
+function parseScalar(context: ParseContext, field: FieldDefinition, offset: number, path: string, diagnostics: ParseDiagnostic[]): { value: string | number | bigint; length: number; raw: Uint8Array; displayValue?: string } {
   if (field.type === "string") {
     const length = resolveLength(context, field, offset, path) ?? 0;
     const raw = context.reader.slice(offset, length);
-    return { value: decodeString(raw, field.encoding ?? "utf8", field.trimNull ?? true), length, raw };
+    const value = decodeStringValue(raw, field.encoding ?? "utf8", field.trimNull ?? true, path, offset, diagnostics, context.rootDiagnostics);
+    const displayValue = decodeStringForDisplay(raw, field.encoding ?? "utf8", field.trimNull ?? true, context.options.maxRawDisplayBytes, path, offset, diagnostics, context.rootDiagnostics);
+    return { value, displayValue, length, raw };
   }
   if (field.type === "bytes") {
     const length = resolveLength(context, field, offset, path) ?? 0;
     const raw = context.reader.slice(offset, length);
-    return { value: bytesToHex(raw, " "), length, raw };
+    return { value: `bytes(${raw.byteLength})`, length, raw };
   }
   return context.reader.read(offset, field.type, field.endianness ?? context.definition.endianness ?? "little");
 }
@@ -155,7 +159,12 @@ function parseArray(
     const before = itemCursor.offset;
     const parsed = parseField(context, item, itemCursor, `${path}[${i}]`, depth + 1);
     if (parsed) children.push({ ...parsed, label: `${field.label ?? field.name} [${i}]` });
-    itemCursor.offset = before + itemSpan(field, parsed?.length ?? Math.max(0, itemCursor.offset - before));
+    const span = itemSpan(field, parsed?.length ?? Math.max(0, itemCursor.offset - before));
+    if (span <= 0) {
+      context.rootDiagnostics.push({ severity: "error", message: `Repeated field ${path} did not consume bytes; stopping to avoid an unbounded loop.`, path, offset: before });
+      break;
+    }
+    itemCursor.offset = before + span;
     if (context.budget.nodesRemaining <= 0) { reportNodeBudget(context.budget, context.rootDiagnostics, `${path}[${i}]`, itemCursor.offset); break; }
   }
   if (requestedCount > context.options.maxArrayItems) context.rootDiagnostics.push({ severity: "warning", message: `Array ${path} truncated at ${context.options.maxArrayItems} items.`, path, offset });
@@ -200,6 +209,26 @@ function decodeString(bytes: Uint8Array, encoding: string, trimNull: boolean): s
   const decoder = new TextDecoder(textDecoderEncoding(encoding), { fatal: false });
   const text = decoder.decode(bytes);
   return trimNull ? text.replace(/\0+$/g, "") : text;
+}
+
+function decodeStringValue(bytes: Uint8Array, encoding: string, trimNull: boolean, path: string, offset: number, fieldDiagnostics: ParseDiagnostic[], rootDiagnostics: ParseDiagnostic[]): string {
+  if (bytes.byteLength <= MAX_SEMANTIC_STRING_BYTES) return decodeString(bytes, encoding, trimNull);
+  const diagnostic = { severity: "warning" as const, message: `String value for ${path} is ${bytes.byteLength} byte(s); semantic value decoding skipped above ${MAX_SEMANTIC_STRING_BYTES} byte(s).`, path, offset };
+  fieldDiagnostics.push(diagnostic);
+  rootDiagnostics.push(diagnostic);
+  return `<string:${bytes.byteLength} bytes>`;
+}
+
+function decodeStringForDisplay(bytes: Uint8Array, encoding: string, trimNull: boolean, maxBytes: number, path: string, offset: number, fieldDiagnostics: ParseDiagnostic[], rootDiagnostics: ParseDiagnostic[]): string {
+  const allowed = Math.max(0, Math.min(bytes.byteLength, maxBytes));
+  const text = decodeString(bytes.subarray(0, allowed), encoding, trimNull);
+  if (allowed < bytes.byteLength) {
+    const diagnostic = { severity: "warning" as const, message: `String display for ${path} truncated at ${allowed} byte(s).`, path, offset };
+    fieldDiagnostics.push(diagnostic);
+    rootDiagnostics.push(diagnostic);
+    return `${text} ... <truncated>`;
+  }
+  return text;
 }
 
 function textDecoderEncoding(encoding: string): string {
@@ -277,19 +306,27 @@ function resolveFieldPath(values: Map<string, unknown>, path: string, currentPat
 }
 
 function validateIntegrity(context: ParseContext, field: FieldDefinition, path: string, offset: number, value: string | number | bigint, raw: Uint8Array, fieldDiagnostics: ParseDiagnostic[]): void {
-  if (field.computed) validateComputed(context, field.computed, path, offset, value, raw, fieldDiagnostics);
-  const check = field.checksum ?? field.hash;
-  if (!check) return;
-  const range = resolveRange(context, check.range);
-  if (!range) {
-    pushIntegrityDiagnostic(context, fieldDiagnostics, check, `Unable to validate ${path}; checksum/hash range could not be resolved.`, path, offset);
-    return;
-  }
-  const bytes = context.reader.slice(range.offset, range.length);
-  const actual = computeIntegrity(check, bytes);
-  const matches = isChecksumAlgorithm(check.algorithm) ? integrityNumberMatches(value, raw, actual) : bytesEqual(raw, actual);
-  if (!matches) {
-    pushIntegrityDiagnostic(context, fieldDiagnostics, check, `${path} ${check.algorithm} mismatch: expected ${expectedDisplay(value, raw)}, computed ${bytesToHex(actual)}.`, path, offset);
+  try {
+    if (field.computed) validateComputed(context, field.computed, path, offset, value, raw, fieldDiagnostics);
+    const check = field.checksum ?? field.hash;
+    if (!check) return;
+    if (!hasUsableIntegrityShape(check)) {
+      pushValidationDiagnostic(context, fieldDiagnostics, "error", `Unable to validate ${path}; checksum/hash metadata is invalid.`, path, offset);
+      return;
+    }
+    const range = resolveRange(context, check.range);
+    if (!range) {
+      pushIntegrityDiagnostic(context, fieldDiagnostics, check, `Unable to validate ${path}; checksum/hash range could not be resolved.`, path, offset);
+      return;
+    }
+    const bytes = context.reader.slice(range.offset, range.length);
+    const actual = computeIntegrity(check, bytes);
+    const matches = isChecksumAlgorithm(check.algorithm) ? integrityNumberMatches(value, raw, actual) : bytesEqual(raw, actual);
+    if (!matches) {
+      pushIntegrityDiagnostic(context, fieldDiagnostics, check, `${path} ${check.algorithm} mismatch: expected ${expectedDisplay(value, raw)}, computed ${bytesToHex(actual)}.`, path, offset);
+    }
+  } catch (error) {
+    pushValidationDiagnostic(context, fieldDiagnostics, "error", `Unable to validate ${path}; ${error instanceof Error ? error.message : String(error)}.`, path, offset);
   }
 }
 
@@ -297,6 +334,7 @@ type ComputedValue = Uint8Array | number;
 
 function validateComputed(context: ParseContext, check: ComputedCheck, path: string, offset: number, value: string | number | bigint, raw: Uint8Array, fieldDiagnostics: ParseDiagnostic[]): void {
   try {
+    if (!hasUsableComputedShape(check)) throw new Error("computed metadata is invalid");
     const computed = applyDerive(evaluateComputed(context, check.expression, 0), check.derive);
     const targetPath = check.compare?.targetPath;
     const targetValue = targetPath ? context.values.get(targetPath) : value;
@@ -477,6 +515,20 @@ function pushComputedDiagnostic(context: ParseContext, fieldDiagnostics: ParseDi
   const diagnostic = { severity: check.severity ?? "error", message, path, offset };
   fieldDiagnostics.push(diagnostic);
   context.rootDiagnostics.push(diagnostic);
+}
+
+function pushValidationDiagnostic(context: ParseContext, fieldDiagnostics: ParseDiagnostic[], severity: ParseDiagnostic["severity"], message: string, path: string, offset: number): void {
+  const diagnostic = { severity, message, path, offset };
+  fieldDiagnostics.push(diagnostic);
+  context.rootDiagnostics.push(diagnostic);
+}
+
+function hasUsableIntegrityShape(value: IntegrityCheck): value is IntegrityCheck {
+  return typeof value.algorithm === "string" && typeof value.range === "object" && value.range !== null;
+}
+
+function hasUsableComputedShape(value: ComputedCheck): value is ComputedCheck {
+  return typeof value.expression === "string" && value.expression.length > 0;
 }
 
 function resolveRange(context: ParseContext, range: DataRange): { offset: number; length: number } | undefined {
