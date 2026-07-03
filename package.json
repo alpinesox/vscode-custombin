@@ -48,7 +48,7 @@
             "filenamePattern": "*"
           }
         ],
-        "priority": "option"
+        "priority": "default"
       }
     ],
     "jsonValidation": [
@@ -85,28 +85,28 @@
         "custombin.maxFileBytes": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 104857600,
+          "maximum": 2147483647,
           "default": 10485760,
           "description": "Maximum file size the viewer parses, in bytes."
         },
         "custombin.maxArrayItems": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 4096,
+          "maximum": 1000000,
           "default": 4096,
           "description": "Maximum array elements rendered from a single field."
         },
         "custombin.maxRenderedFields": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 20000,
+          "maximum": 1000000,
           "default": 10000,
           "description": "Maximum expanded field rows rendered for one parse result."
         },
         "custombin.maxRawDisplayBytes": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 1048576,
+          "maximum": 268435456,
           "default": 65536,
           "description": "Maximum aggregate raw bytes converted to display text for one parse result."
         }

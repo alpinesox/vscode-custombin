@@ -29,10 +29,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }));
   context.subscriptions.push(vscode.commands.registerCommand("custombin.reloadFormats", async () => {
     await registry.load();
+    registry.watch();
     await vscode.window.showInformationMessage(`Loaded ${registry.all.length} Custom Binary Viewer format definition(s).`);
   }));
   context.subscriptions.push(vscode.commands.registerCommand("custombin.validateFormats", async () => {
     await registry.load();
+    registry.watch();
     const errors = registry.issues.filter(issue => issue.severity === "error");
     await vscode.window.showInformationMessage(errors.length ? `${errors.length} format definition issue(s).` : "All format definitions are valid.");
   }));
@@ -95,20 +97,29 @@ class CustomBinEditorProvider implements vscode.CustomReadonlyEditorProvider {
 
   private async candidates(uri: vscode.Uri): Promise<CandidateResult[]> {
     const config = vscode.workspace.getConfiguration("custombin");
-    const maxFileBytes = clampInteger(config.get<number>("maxFileBytes"), 1, 100 * 1024 * 1024, 10 * 1024 * 1024);
-    const maxArrayItems = clampInteger(config.get<number>("maxArrayItems"), 1, 4096, 4096);
-    const maxRenderedFields = clampInteger(config.get<number>("maxRenderedFields"), 1, 20000, 10000);
-    const maxRawDisplayBytes = clampInteger(config.get<number>("maxRawDisplayBytes"), 0, 1024 * 1024, 64 * 1024);
+    const maxFileBytes = getIntegerSetting(config, "maxFileBytes", 1, 2147483647, 10 * 1024 * 1024);
+    const maxArrayItems = getIntegerSetting(config, "maxArrayItems", 1, 1000000, 4096);
+    const maxRenderedFields = getIntegerSetting(config, "maxRenderedFields", 1, 1000000, 10000);
+    const maxRawDisplayBytes = getIntegerSetting(config, "maxRawDisplayBytes", 0, 268435456, 64 * 1024);
     const stat = await vscode.workspace.fs.stat(uri);
-    if (stat.size > maxFileBytes) throw new Error(`File is ${stat.size} bytes; limit is ${maxFileBytes}.`);
+    if (stat.size > maxFileBytes) throw new Error(`File is ${stat.size} bytes; custombin.maxFileBytes is ${maxFileBytes}. Increase custombin.maxFileBytes to parse this file.`);
     const bytes = await vscode.workspace.fs.readFile(uri);
     return matchFormats(bytes, path.basename(uri.fsPath), this.registry.all, { maxArrayItems, maxRenderedFields, maxRawDisplayBytes });
   }
 }
 
-function clampInteger(value: number | undefined, min: number, max: number, fallback: number): number {
-  if (!Number.isInteger(value)) return fallback;
-  return Math.max(min, Math.min(max, value as number));
+function getIntegerSetting(config: vscode.WorkspaceConfiguration, key: string, min: number, max: number, fallback: number): number {
+  const value = config.get<number>(key);
+  if (!Number.isInteger(value)) {
+    void vscode.window.showWarningMessage(`custombin.${key} must be an integer; using default ${fallback}.`);
+    return fallback;
+  }
+  if ((value as number) < min || (value as number) > max) {
+    const clamped = Math.max(min, Math.min(max, value as number));
+    void vscode.window.showWarningMessage(`custombin.${key}=${value} is outside ${min}-${max}; using ${clamped}.`);
+    return clamped;
+  }
+  return value as number;
 }
 
 function isSelectFormatMessage(message: unknown): message is { command: "selectFormat"; formatId: string } {

@@ -47,7 +47,7 @@
     if (!items || !items.length) return '';
     return items.map(function (diag) {
       var cls = diag.severity === 'error' ? 'err' : diag.severity === 'warning' ? 'warn' : 'info';
-      return '<div class="banner ' + cls + '"><strong>' + esc(diag.severity.toUpperCase()) + '</strong>: ' + esc(diag.message) + (diag.path ? ' <span class="mono">' + esc(diag.path) + '</span>' : '') + '</div>';
+      return '<div class="banner ' + cls + '"><strong>' + esc(diag.severity.toUpperCase()) + '</strong>: ' + esc(diag.message) + (diag.path ? ' <span class="mono">' + esc(diag.path) + '</span>' : '') + (diag.offset !== undefined ? ' <span class="mono">@0x' + Number(diag.offset).toString(16).toUpperCase() + '</span>' : '') + (diag.sourcePath ? ' <span class="mono">' + esc(diag.sourcePath) + '</span>' : '') + '</div>';
     }).join('');
   }
 

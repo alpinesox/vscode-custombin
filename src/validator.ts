@@ -1,7 +1,7 @@
 import { FormatDefinition, RegistryDiagnostic } from "./model";
 
 const SUPPORTED_TYPES = new Set(["u8", "i8", "u16", "i16", "u32", "i32", "u64", "i64", "f32", "f64", "bytes", "string", "struct", "section"]);
-const TOP_LEVEL_KEYS = new Set(["schemaVersion", "id", "name", "title", "summary", "version", "status", "provenance", "references", "meta", "description", "fileExtensions", "endianness", "confidence", "minSize", "maxSize", "magic", "fields"]);
+const TOP_LEVEL_KEYS = new Set(["$schema", "$id", "$comment", "schemaVersion", "id", "name", "title", "summary", "version", "status", "provenance", "references", "meta", "description", "fileExtensions", "endianness", "confidence", "minSize", "maxSize", "magic", "fields"]);
 const FIELD_KEYS = new Set(["name", "label", "description", "offset", "type", "endianness", "length", "encoding", "trimNull", "count", "repeatToEof", "stride", "itemLength", "lengthFrom", "enum", "flags", "children", "format", "required", "dependsOn", "checksum", "hash", "computed", "meta"]);
 const MAGIC_KEYS = new Set(["offset", "bytes", "required", "description"]);
 const ENCODINGS = new Set(["ascii", "utf8", "utf16le", "hex"]);
@@ -37,7 +37,7 @@ export function validateFormatDefinition(value: unknown, sourcePath: string): { 
   validateOptionalInteger(value.confidence, sourcePath, diagnostics, "confidence", 0, 100);
   if (value.endianness !== undefined && value.endianness !== "little" && value.endianness !== "big") diagnostics.push(diag(sourcePath, "endianness must be little or big."));
 
-  if (diagnostics.some(item => item.severity === "error")) return { diagnostics };
+  if (value.schemaVersion !== 1 || typeof value.id !== "string" || !/^[A-Za-z0-9_.-]+$/.test(value.id) || typeof value.name !== "string" || value.name.length === 0 || !Array.isArray(value.fields) || value.fields.length === 0) return { diagnostics };
   return { definition: normalize(value as unknown as FormatDefinition, sourcePath), diagnostics };
 }
 
@@ -54,8 +54,8 @@ function validateField(value: unknown, sourcePath: string, diagnostics: Registry
   validateOptionalInteger(value.itemLength, sourcePath, diagnostics, "field.itemLength", 1, 1024 * 1024);
   if (value.repeatToEof !== undefined && typeof value.repeatToEof !== "boolean") diagnostics.push(diag(sourcePath, "field.repeatToEof must be boolean."));
   if (value.lengthFrom !== undefined && (typeof value.lengthFrom !== "string" || !isFieldPath(value.lengthFrom))) diagnostics.push(diag(sourcePath, "field.lengthFrom must be a field path."));
-  if ((value.type === "string" || value.type === "bytes") && typeof value.length !== "number" && typeof value.lengthFrom !== "string") diagnostics.push(diag(sourcePath, `${String(value.type)} field ${String(value.name)} requires length or lengthFrom.`));
-  if ((value.type === "struct" || value.type === "section") && !Array.isArray(value.children)) diagnostics.push(diag(sourcePath, `${String(value.type)} field ${String(value.name)} requires children.`));
+  if ((value.type === "string" || value.type === "bytes") && typeof value.length !== "number" && typeof value.lengthFrom !== "string" && value.repeatToEof !== true) diagnostics.push(diag(sourcePath, `${String(value.type)} field ${String(value.name)} requires length, lengthFrom, or repeatToEof.`));
+  if (value.type === "struct" && !Array.isArray(value.children)) diagnostics.push(diag(sourcePath, `${String(value.type)} field ${String(value.name)} requires children.`));
   if (value.endianness !== undefined && value.endianness !== "little" && value.endianness !== "big") diagnostics.push(diag(sourcePath, "field.endianness must be little or big."));
   if (value.encoding !== undefined && (typeof value.encoding !== "string" || !ENCODINGS.has(value.encoding))) diagnostics.push(diag(sourcePath, "field.encoding is invalid."));
   if (value.format !== undefined && (typeof value.format !== "string" || !FORMATS.has(value.format))) diagnostics.push(diag(sourcePath, "field.format is invalid."));
@@ -74,7 +74,7 @@ function validateField(value: unknown, sourcePath: string, diagnostics: Registry
 }
 
 function rejectUnknownKeys(value: Record<string, unknown>, allowed: Set<string>, sourcePath: string, diagnostics: RegistryDiagnostic[], label: string): void {
-  for (const key of Object.keys(value)) if (!allowed.has(key)) diagnostics.push(diag(sourcePath, `Unknown ${label} property: ${key}.`));
+  for (const key of Object.keys(value)) if (!allowed.has(key) && !key.startsWith("$")) diagnostics.push(diag(sourcePath, `Unknown ${label} property: ${key}.`));
 }
 
 function validateEnum(value: unknown, sourcePath: string, diagnostics: RegistryDiagnostic[]): void {

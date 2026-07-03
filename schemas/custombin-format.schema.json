@@ -1,12 +1,16 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://alpinesox.github.io/vscode-custombin/custombin-format.schema.json",
+  "$id": "https://raw.githubusercontent.com/alpinesox/vscode-custombin/main/schemas/custombin-format.schema.json",
   "title": "Custom Binary Viewer Format",
   "type": "object",
   "additionalProperties": false,
+  "patternProperties": { "^\\$": true },
   "required": ["schemaVersion", "id", "name", "fields"],
   "properties": {
     "schemaVersion": { "type": "integer", "const": 1 },
+    "$schema": { "type": "string" },
+    "$id": { "type": "string" },
+    "$comment": { "type": "string" },
     "id": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+$" },
     "name": { "type": "string", "minLength": 1 },
     "title": { "type": "string" },
@@ -32,6 +36,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
+        "patternProperties": { "^\\$": true },
         "required": ["offset", "bytes"],
         "properties": {
           "offset": { "type": "integer", "minimum": 0 },
@@ -52,6 +57,7 @@
     "field": {
       "type": "object",
       "additionalProperties": false,
+      "patternProperties": { "^\\$": true },
       "required": ["name", "type"],
       "properties": {
         "name": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
@@ -62,14 +68,14 @@
           "enum": ["u8", "i8", "u16", "i16", "u32", "i32", "u64", "i64", "f32", "f64", "bytes", "string", "struct", "section"]
         },
         "endianness": { "enum": ["little", "big"] },
-        "length": { "type": "integer", "minimum": 0, "maximum": 1048576 },
+        "length": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
         "lengthFrom": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\[\\d+\\])?(\\.[A-Za-z_][A-Za-z0-9_]*(\\[\\d+\\])?)*$" },
         "encoding": { "enum": ["ascii", "utf8", "utf16le", "hex"] },
         "trimNull": { "type": "boolean", "default": true },
-        "count": { "type": "integer", "minimum": 0, "maximum": 4096 },
+        "count": { "type": "integer", "minimum": 0, "maximum": 1000000 },
         "repeatToEof": { "type": "boolean", "default": false },
         "stride": { "type": "integer", "minimum": 1, "maximum": 1048576 },
-        "itemLength": { "type": "integer", "minimum": 1, "maximum": 1048576 },
+        "itemLength": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
         "enum": {
           "type": "object",
           "additionalProperties": { "type": "string" }
@@ -79,6 +85,7 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
+            "patternProperties": { "^\\$": true },
             "required": ["mask", "label"],
             "properties": {
               "mask": { "type": "integer", "minimum": 0 },
@@ -108,6 +115,7 @@
     "computed": {
       "type": "object",
       "additionalProperties": false,
+      "patternProperties": { "^\\$": true },
       "required": ["expression"],
       "properties": {
         "expression": { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "^[A-Za-z0-9_().,:[\\]\\s+-]+$" },
@@ -123,6 +131,7 @@
     "deriveStep": {
       "type": "object",
       "additionalProperties": false,
+      "patternProperties": { "^\\$": true },
       "required": ["op"],
       "properties": {
         "op": { "enum": ["slice", "u32le", "le32", "u32be", "be32"] },
@@ -139,6 +148,7 @@
     "compare": {
       "type": "object",
       "additionalProperties": false,
+      "patternProperties": { "^\\$": true },
       "properties": {
         "targetPath": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\[\\d+\\])?(\\.[A-Za-z_][A-Za-z0-9_]*(\\[\\d+\\])?)*$" },
         "mode": { "enum": ["auto", "numeric", "raw-bytes"], "default": "auto" }
@@ -147,6 +157,7 @@
     "checksum": {
       "type": "object",
       "additionalProperties": false,
+      "patternProperties": { "^\\$": true },
       "required": ["algorithm", "range"],
       "properties": {
         "algorithm": { "enum": ["crc32", "crc32-reflected", "crc32-non-reflected"] },
@@ -157,6 +168,7 @@
     "hash": {
       "type": "object",
       "additionalProperties": false,
+      "patternProperties": { "^\\$": true },
       "required": ["algorithm", "range"],
       "properties": {
         "algorithm": { "enum": ["sha1", "sha256", "sha384", "sha512", "sha3-256", "sha3-384", "sha3-512"] },
@@ -167,6 +179,7 @@
     "range": {
       "type": "object",
       "additionalProperties": false,
+      "patternProperties": { "^\\$": true },
       "properties": {
         "offset": { "type": "integer", "minimum": 0 },
         "offsetFrom": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\[\\d+\\])?(\\.[A-Za-z_][A-Za-z0-9_]*(\\[\\d+\\])?)*$" },
@@ -191,6 +204,7 @@
     "dependency": {
       "type": "object",
       "additionalProperties": false,
+      "patternProperties": { "^\\$": true },
       "required": ["path"],
       "properties": {
         "path": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\[\\d+\\])?(\\.[A-Za-z_][A-Za-z0-9_]*(\\[\\d+\\])?)*$" },

@@ -1,3 +1,4 @@
+import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
 import { FormatDefinition, RegistryDiagnostic } from "./model";
@@ -11,7 +12,7 @@ const MAX_FORMAT_PATH_DEPTH = 8;
 export class FormatRegistry implements vscode.Disposable {
   private definitions: FormatDefinition[] = [];
   private diagnostics: RegistryDiagnostic[] = [];
-  private watcher: vscode.FileSystemWatcher | undefined;
+  private watchers: vscode.Disposable[] = [];
   private readonly onDidChangeEmitter = new vscode.EventEmitter<void>();
   readonly onDidChange = this.onDidChangeEmitter.event;
 
@@ -51,16 +52,20 @@ export class FormatRegistry implements vscode.Disposable {
   }
 
   watch(): void {
-    this.watcher?.dispose();
+    this.watchers.splice(0).forEach(watcher => { watcher.dispose(); });
     const folders = configuredFolders().join(",");
-    this.watcher = vscode.workspace.createFileSystemWatcher(`**/{${folders}}/*.json`);
-    this.watcher.onDidCreate(() => { void this.load(); });
-    this.watcher.onDidChange(() => { void this.load(); });
-    this.watcher.onDidDelete(() => { void this.load(); });
+    const watcher = vscode.workspace.createFileSystemWatcher(`**/{${folders}}/*.json`);
+    this.watchers.push(watcher);
+    watcher.onDidCreate(() => { void this.load(); });
+    watcher.onDidChange(() => { void this.load(); });
+    watcher.onDidDelete(() => { void this.load(); });
+    for (const entry of configuredFormatPaths().slice(0, MAX_FORMAT_PATHS)) {
+      for (const root of formatPathRoots(entry)) this.watchers.push(watchExternalPath(root, () => { void this.load(); }));
+    }
   }
 
   dispose(): void {
-    this.watcher?.dispose();
+    this.watchers.splice(0).forEach(watcher => { watcher.dispose(); });
     this.onDidChangeEmitter.dispose();
   }
 
@@ -72,12 +77,6 @@ export class FormatRegistry implements vscode.Disposable {
     for (const entry of configuredFormatPaths().slice(0, MAX_FORMAT_PATHS)) {
       uris.push(...await formatPathUris(entry));
     }
-    const builtin = vscode.Uri.joinPath(this.extensionUri, "extensions");
-    try {
-      for (const [name, type] of await vscode.workspace.fs.readDirectory(builtin)) {
-        if (type === vscode.FileType.File && name.endsWith(".json")) uris.push(vscode.Uri.joinPath(builtin, name));
-      }
-    } catch { /* no built-in formats in development */ }
     return uris.sort((a, b) => path.basename(a.fsPath).localeCompare(path.basename(b.fsPath)));
   }
 }
@@ -94,15 +93,34 @@ function configuredFormatPaths(): string[] {
 }
 
 async function formatPathUris(entry: string): Promise<vscode.Uri[]> {
-  const expanded = expandHome(entry);
-  if (!safeConfiguredPath(expanded)) return [];
-  const roots = path.isAbsolute(expanded) ? [expanded] : workspaceRootPaths().map(root => `${root}${path.sep}${expanded}`);
+  const roots = formatPathRoots(entry);
   const uris: vscode.Uri[] = [];
   for (const root of roots) {
     const parsed = parseFormatPath(root);
     uris.push(...await collectFormatFiles(vscode.Uri.file(parsed.root), parsed.matcher, 0));
   }
   return uris;
+}
+
+function formatPathRoots(entry: string): string[] {
+  const expanded = expandHome(entry);
+  if (!safeConfiguredPath(expanded)) return [];
+  return path.isAbsolute(expanded) ? [expanded] : workspaceRootPaths().map(root => `${root}${path.sep}${expanded}`);
+}
+
+function watchExternalPath(root: string, onChange: () => void): vscode.Disposable {
+  const parsed = parseFormatPath(root);
+  let timer: NodeJS.Timeout | undefined;
+  const trigger = (): void => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(onChange, 250);
+  };
+  try {
+    const watcher = fs.watch(parsed.root, { recursive: true }, trigger);
+    return { dispose: (): void => { if (timer) clearTimeout(timer); watcher.close(); } };
+  } catch {
+    return { dispose: (): void => { if (timer) clearTimeout(timer); } };
+  }
 }
 
 function workspaceRootPaths(): string[] {

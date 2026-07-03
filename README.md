@@ -2,7 +2,7 @@
 
 Custom Binary Viewer is a read-only VS Code extension for inspecting arbitrary binary file formats from local JSON format definitions.
 
-It is intentionally generic. It does not contain certificate, key, ASN.1, or other domain-specific parsers. Instead, it loads definitions from workspace `extensions/` or `formats/` folders, optional configured format paths, and bundled samples, then interprets those definitions against binary files.
+It is intentionally generic. It does not contain certificate, key, ASN.1, or other domain-specific parsers. Instead, it loads definitions from workspace `extensions` or `formats` folders and optional configured format paths, then interprets those definitions against binary files.
 
 ## Features
 
@@ -79,7 +79,7 @@ Supported primitive field types are `u8`, `i8`, `u16`, `i16`, `u32`, `i32`, `u64
 
 The default endianness is `little`. Set top-level `endianness` to change the default for the definition, or set field-level `endianness` to override one numeric field.
 
-String and bytes fields require either `length` or `lengthFrom`. `length` is an explicit byte count. `lengthFrom` reads a previously parsed field path and uses its numeric value as the byte count.
+String and bytes fields require `length`, `lengthFrom`, or `repeatToEof`. `length` is an explicit byte count. `lengthFrom` can reference a sibling field inside the same struct item, which supports TLV records such as `{ tag, len, payload[len] }` repeated to EOF. `repeatToEof` consumes the remaining bytes for a bare string or bytes field.
 
 String fields support these encodings:
 
@@ -93,10 +93,25 @@ Both string and bytes reads are bounds checked.
 Arrays can use one of these controls:
 
 - `count`: parse a fixed number of items.
-- `lengthFrom`: parse a number of items from a previously parsed field path.
+- `lengthFrom`: parse a number of items from a field path.
 - `repeatToEof`: repeat until the end of the file.
 
 Use `itemLength` for fixed-size records and `stride` when each item begins at a predictable distance from the previous item. For example, an appended table with 256-byte records can use `repeatToEof: true` and `itemLength: 256`.
+
+For TLV-style records, define a repeated struct and use sibling `lengthFrom` on the payload:
+
+```json
+{
+  "name": "records",
+  "type": "struct",
+  "repeatToEof": true,
+  "children": [
+    { "name": "tag", "type": "u16" },
+    { "name": "len", "type": "u32" },
+    { "name": "payload", "type": "bytes", "lengthFrom": "len" }
+  ]
+}
+```
 
 Fields can include explicit `offset` values even when sequential parsing would work. Prefer explicit `offset` and `length` values when they make the format definition clearer or align with an external specification.
 
@@ -210,9 +225,13 @@ The viewer applies multiple budgets because workspace format definitions and bin
 
 The extension also caps loaded format definition files and skips definition JSON files larger than 1 MiB. When a budget is reached, parsing continues only where safe and reports a warning diagnostic such as truncated field output or truncated raw-byte display.
 
+These limits are configurable up to larger hard ceilings intended to protect the extension host from accidental unbounded work. If a configured value is outside the supported range or is not an integer, the viewer reports a warning and shows the effective value. Oversized-file diagnostics name `custombin.maxFileBytes` so users know which setting to raise.
+
 ## VS Code registration limits
 
 VS Code custom editor selectors are contributed statically from `package.json`. Runtime JSON definitions cannot dynamically add new custom editor selectors. This extension therefore contributes a broad optional custom editor and works best through **Open With...** or the `Custom Binary Viewer: Open` command. You can use VS Code `workbench.editorAssociations` manually if you want specific extensions to open with this viewer by default.
+
+The extension registers a broad default custom editor selector so files with unrecognized extensions can open in Custom Binary Viewer without requiring a per-extension contribution. VS Code may still prefer a more specific editor contributed by VS Code or another extension.
 
 ## Format discovery
 
@@ -230,7 +249,7 @@ Example:
 }
 ```
 
-Directory entries load recursive `.json` files up to the traversal depth limit. Glob entries only load files matching the pattern. The extension caps the number of configured paths, traversal depth, loaded definition files, and definition file size.
+Directory entries load recursive `.json` files up to the traversal depth limit. Glob entries only load files matching the pattern. The extension caps the number of configured paths, traversal depth, loaded definition files, and definition file size. Use `Custom Binary Viewer: Reload Format Definitions` after changing discovery settings; edits under watched workspace folders or configured external roots hot-reload automatically.
 
 ## Security and robustness notes
 

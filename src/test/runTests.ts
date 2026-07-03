@@ -188,11 +188,32 @@ function testSectionsDependsOnAndMetadata(): void {
   };
   const validated = validateFormatDefinition(definition, "sections.json");
   assert.strictEqual(validated.diagnostics.length, 0);
+  assert.strictEqual(validateFormatDefinition({ schemaVersion: 1, id: "test.empty-section", name: "Empty Section", fields: [{ name: "note", type: "section", label: "Note" }] }, "empty.json").diagnostics.length, 0);
   const result = parseBinary(new Uint8Array([1, 7, 9]), definition, parseOptions);
   assert.strictEqual(result.fields[1]?.type, "section");
   assert.strictEqual(result.fields[1]?.children?.length, 1);
   assert.strictEqual(result.fields[1]?.children?.[0]?.displayValue, "7");
   assert.deepStrictEqual(result.fields[1]?.meta, { source: "spec" });
+}
+
+function testConsumeRemainingAndSiblingLength(): void {
+  const remainingDefinition: FormatDefinition = { schemaVersion: 1, id: "test.remaining", name: "Remaining", fields: [{ name: "prefix", type: "u8" }, { name: "tail", type: "bytes", repeatToEof: true }] };
+  const remaining = parseBinary(new Uint8Array([1, 2, 3, 4]), remainingDefinition, parseOptions);
+  assert.strictEqual(remaining.fields[1]?.length, 3);
+  assert.strictEqual(remaining.fields[1]?.rawValue, "02 03 04");
+
+  const tlvDefinition: FormatDefinition = {
+    schemaVersion: 1,
+    id: "test.tlv",
+    name: "TLV",
+    fields: [{ name: "records", type: "struct", repeatToEof: true, children: [{ name: "tag", type: "u16" }, { name: "len", type: "u32" }, { name: "payload", type: "bytes", lengthFrom: "len" }] }],
+  };
+  const tlv = new Uint8Array([1, 0, 3, 0, 0, 0, 9, 8, 7, 2, 0, 1, 0, 0, 0, 6]);
+  const result = parseBinary(tlv, tlvDefinition, parseOptions);
+  assert.strictEqual(result.diagnostics.length, 0);
+  assert.strictEqual(result.fields[0]?.children?.length, 2);
+  assert.strictEqual(result.fields[0]?.children?.[0]?.children?.[2]?.rawValue, "09 08 07");
+  assert.strictEqual(result.fields[0]?.children?.[1]?.children?.[2]?.rawValue, "06");
 }
 
 function testChecksumAndHashDiagnostics(): void {
@@ -281,6 +302,11 @@ function testValidation(): void {
   assert.ok(badFlag.diagnostics.length >= 2);
   const badMagic = validateFormatDefinition({ schemaVersion: 1, id: "bad.magic", name: "Bad", magic: [{ offset: 0, bytes: "00", extra: true }], fields: [{ name: "x", type: "u8" }] }, "magic.json");
   assert.ok(badMagic.diagnostics.some(item => item.message.includes("Unknown magic property")));
+  const standardMetadata = validateFormatDefinition({ $schema: "./custombin-format.schema.json", $comment: "ok", schemaVersion: 1, id: "test.schema-meta", name: "Schema Metadata", fields: [{ name: "x", type: "u8", $comment: "ok" }] }, "meta.json");
+  assert.ok(standardMetadata.definition);
+  const partial = validateFormatDefinition({ schemaVersion: 1, id: "test.partial", name: "Partial", fields: [{ name: "x", type: "bad" }, { name: "y", type: "u8" }] }, "partial.json");
+  assert.ok(partial.definition);
+  assert.ok(partial.diagnostics.some(item => item.message.includes("Unsupported field type")));
 }
 
 function run(): void {
@@ -296,6 +322,7 @@ function run(): void {
   testParseBudgets();
   testLengthFromRepeatAndStride();
   testSectionsDependsOnAndMetadata();
+  testConsumeRemainingAndSiblingLength();
   testChecksumAndHashDiagnostics();
   testComputedDiagnostics();
   testValidation();

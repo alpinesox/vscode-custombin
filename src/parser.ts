@@ -56,7 +56,7 @@ function parseField(
   const label = field.label ?? field.name;
   try {
     if (depth > 16) throw new Error("Maximum nested structure depth exceeded.");
-    if (!dependencySatisfied(field, context)) return undefined;
+    if (!dependencySatisfied(field, context, path)) return undefined;
     if (!consumeNodeBudget(context.budget, context.rootDiagnostics, path, offset)) return undefined;
     const result = isRepeated(field)
       ? parseArray(context, field, offset, path, depth)
@@ -86,7 +86,7 @@ function parseField(
 }
 
 function parseScalarField(context: ParseContext, field: FieldDefinition, offset: number, path: string, label: string, diagnostics: ParseDiagnostic[]): ParsedField {
-  const parsed = parseScalar(context, field, offset);
+  const parsed = parseScalar(context, field, offset, path);
   context.values.set(path, parsed.value);
   context.rawValues.set(path, parsed.raw);
   const rawValue = formatRawValue(parsed.raw, path, offset, context.rootDiagnostics, context.budget);
@@ -106,14 +106,14 @@ function parseScalarField(context: ParseContext, field: FieldDefinition, offset:
   };
 }
 
-function parseScalar(context: ParseContext, field: FieldDefinition, offset: number): { value: string | number | bigint; length: number; raw: Uint8Array } {
+function parseScalar(context: ParseContext, field: FieldDefinition, offset: number, path: string): { value: string | number | bigint; length: number; raw: Uint8Array } {
   if (field.type === "string") {
-    const length = resolveLength(context, field) ?? 0;
+    const length = resolveLength(context, field, offset, path) ?? 0;
     const raw = context.reader.slice(offset, length);
     return { value: decodeString(raw, field.encoding ?? "utf8", field.trimNull ?? true), length, raw };
   }
   if (field.type === "bytes") {
-    const length = resolveLength(context, field) ?? 0;
+    const length = resolveLength(context, field, offset, path) ?? 0;
     const raw = context.reader.slice(offset, length);
     return { value: bytesToHex(raw, " "), length, raw };
   }
@@ -145,12 +145,13 @@ function parseArray(
   path: string,
   depth: number
 ): ParsedField {
-  const requestedCount = resolveArrayCount(context, field, offset);
+  const requestedCount = resolveArrayCount(context, field, offset, path);
   const count = Math.min(requestedCount, context.options.maxArrayItems);
   const item: FieldDefinition = { ...field, count: undefined, repeatToEof: undefined, lengthFrom: undefined, offset: undefined, name: "item", label: "Item" };
   const itemCursor = { offset };
   const children: ParsedField[] = [];
   for (let i = 0; i < count; i++) {
+    if (field.repeatToEof && itemCursor.offset >= context.reader.length) break;
     const before = itemCursor.offset;
     const parsed = parseField(context, item, itemCursor, `${path}[${i}]`, depth + 1);
     if (parsed) children.push({ ...parsed, label: `${field.label ?? field.name} [${i}]` });
@@ -162,19 +163,20 @@ function parseArray(
 }
 
 function isRepeated(field: FieldDefinition): boolean {
-  return field.count !== undefined || field.repeatToEof === true || (field.lengthFrom !== undefined && field.type !== "string" && field.type !== "bytes");
+  return field.count !== undefined || (field.repeatToEof === true && field.type !== "string" && field.type !== "bytes") || (field.lengthFrom !== undefined && field.type !== "string" && field.type !== "bytes");
 }
 
-function resolveLength(context: ParseContext, field: FieldDefinition): number | undefined {
-  return field.lengthFrom ? numericValue(context, field.lengthFrom) : field.length;
+function resolveLength(context: ParseContext, field: FieldDefinition, offset: number, path: string): number | undefined {
+  if (field.repeatToEof) return Math.max(0, context.reader.length - offset);
+  return field.lengthFrom ? numericValue(context, field.lengthFrom, path) : field.length;
 }
 
-function resolveArrayCount(context: ParseContext, field: FieldDefinition, offset: number): number {
+function resolveArrayCount(context: ParseContext, field: FieldDefinition, offset: number, path: string): number {
   if (field.count !== undefined) return field.count;
-  if (field.lengthFrom) return numericValue(context, field.lengthFrom) ?? 0;
+  if (field.lengthFrom) return numericValue(context, field.lengthFrom, path) ?? 0;
   if (field.repeatToEof) {
     const span = itemSpan(field, field.itemLength ?? field.stride ?? scalarWidth(field));
-    return span > 0 ? Math.floor((context.reader.length - offset) / span) : 0;
+    return span > 0 ? Math.floor((context.reader.length - offset) / span) : context.options.maxArrayItems;
   }
   return 0;
 }
@@ -232,11 +234,11 @@ function formatRawValue(raw: Uint8Array, path: string, offset: number, diagnosti
   return formatted;
 }
 
-function dependencySatisfied(field: FieldDefinition, context: ParseContext): boolean {
+function dependencySatisfied(field: FieldDefinition, context: ParseContext, currentPath: string): boolean {
   if (!field.dependsOn) return true;
   const dependencies = Array.isArray(field.dependsOn) ? field.dependsOn : [field.dependsOn];
   return dependencies.every(dependency => {
-    const actual = context.values.get(dependency.path);
+    const actual = fieldValue(context, dependency.path, currentPath);
     const present = actual !== undefined;
     if (dependency.present !== undefined && dependency.present !== present) return false;
     if (dependency.present === false && !present && dependency.equals === undefined && dependency.notEquals === undefined && dependency.mask === undefined) return true;
@@ -256,11 +258,22 @@ function applyMask(value: string | number | bigint | boolean, mask: number): num
   return Number.isFinite(numeric) ? numeric & mask : 0;
 }
 
-function numericValue(context: ParseContext, path: string): number | undefined {
-  const value = context.values.get(path);
+function numericValue(context: ParseContext, path: string, currentPath?: string): number | undefined {
+  const value = fieldValue(context, path, currentPath);
   if (value === undefined) return undefined;
   const numeric = typeof value === "bigint" ? Number(value) : Number(value);
   return Number.isSafeInteger(numeric) && numeric >= 0 ? numeric : undefined;
+}
+
+function fieldValue(context: ParseContext, path: string, currentPath?: string): string | number | bigint | boolean | undefined {
+  return context.values.get(resolveFieldPath(context.values, path, currentPath));
+}
+
+function resolveFieldPath(values: Map<string, unknown>, path: string, currentPath?: string): string {
+  if (values.has(path) || !currentPath || path.includes(".")) return path;
+  const parent = currentPath.includes(".") ? currentPath.slice(0, currentPath.lastIndexOf(".")) : "";
+  const sibling = parent ? `${parent}.${path}` : path;
+  return values.has(sibling) ? sibling : path;
 }
 
 function validateIntegrity(context: ParseContext, field: FieldDefinition, path: string, offset: number, value: string | number | bigint, raw: Uint8Array, fieldDiagnostics: ParseDiagnostic[]): void {
